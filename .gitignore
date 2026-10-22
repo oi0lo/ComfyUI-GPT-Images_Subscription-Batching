@@ -1,0 +1,29 @@
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# Local secrets and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Editor and system artifacts
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Never commit generated results or temporary run data
+output/
+generated_images/
+comfyui-gpt-images-*/
