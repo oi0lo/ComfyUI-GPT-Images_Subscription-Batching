@@ -1,4 +1,6 @@
 import ctypes
+import os
+import sys
 import unittest
 
 import helpers  # noqa: F401
@@ -9,23 +11,46 @@ class ResolveTests(unittest.TestCase):
     def test_environment_first(self):
         key, source = credentials.resolve_api_key({"OPENAI_API_KEY": " sk-env-123456 "}, lambda: "sk-store-1")
         self.assertEqual(key, "sk-env-123456")
-        self.assertIn("environment", source)
+        self.assertEqual(source, credentials.ENV_SOURCE)
 
     def test_store_when_no_environment(self):
         key, source = credentials.resolve_api_key({}, lambda: "sk-store-123456")
         self.assertEqual(key, "sk-store-123456")
-        self.assertIn("Credential Manager", source)
+        self.assertEqual(source, credentials.STORE_SOURCE)
 
     def test_bad_environment_key_does_not_fall_back(self):
         consulted = []
-        with self.assertRaises(credentials.CredentialError):
+        with self.assertRaises(credentials.CredentialError) as caught:
             credentials.resolve_api_key({"OPENAI_API_KEY": "sk bad key"}, lambda: consulted.append(1) or "x")
+        self.assertNotIsInstance(caught.exception, (credentials.NoKeyError, credentials.StoredKeyInvalid))
+        self.assertIn("environment variable", str(caught.exception))
         self.assertEqual(consulted, [])
 
-    def test_missing_gives_setup_instructions(self):
-        with self.assertRaises(credentials.CredentialError) as caught:
+    def test_missing_key_is_its_own_error(self):
+        with self.assertRaises(credentials.NoKeyError) as caught:
             credentials.resolve_api_key({}, lambda: None)
-        self.assertIn("setup_credentials.py set", str(caught.exception))
+        self.assertIn("OPENAI_API_KEY", str(caught.exception))
+
+    def test_exact_helper_command_on_windows(self):
+        real = sys.platform
+        try:
+            sys.platform = "win32"
+            message = credentials.setup_hint()
+        finally:
+            sys.platform = real
+        self.assertIn(sys.executable, message)
+        self.assertIn(os.path.join(credentials.PACKAGE_DIR, "setup_credentials.py"), message)
+        self.assertIn(" set", message)
+
+    def test_unusable_stored_key(self):
+        with self.assertRaises(credentials.StoredKeyInvalid):
+            credentials.resolve_api_key({}, lambda: "has spaces in it")
+
+        def unreadable():
+            raise credentials.CredentialError("cannot be read")
+
+        with self.assertRaises(credentials.StoredKeyInvalid):
+            credentials.resolve_api_key({}, unreadable)
 
     def test_syntax(self):
         for bad in ["", "a b", "tab\tkey", "ключ", "x" * 3000]:

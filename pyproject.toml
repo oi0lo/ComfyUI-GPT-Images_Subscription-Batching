@@ -1,6 +1,6 @@
 [project]
 name = "comfyui-gpt-images-subscription-batching"
-version = "1.0.0"
+version = "2.0.0"
 description = "ComfyUI node for ChatGPT-authenticated Codex image generation and OpenAI Sunburst Batch submissions"
 readme = "README.md"
 requires-python = ">=3.10"

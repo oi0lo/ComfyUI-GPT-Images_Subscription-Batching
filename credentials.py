@@ -1,8 +1,8 @@
 """OpenAI API key for Sunburst Batch mode.
 
 Order: OPENAI_API_KEY environment variable first, then (Windows only) this
-package's own Windows Credential Manager entry. No fallback to the other source
-if the first one turns out to be wrong. Standard library only (ctypes).
+package's own Windows Credential Manager entry. No fallback from the variable
+if it turns out to be wrong. Standard library only (ctypes).
 """
 
 from __future__ import annotations
@@ -13,17 +13,39 @@ import sys
 ENV_VAR = "OPENAI_API_KEY"
 TARGET = "ComfyUI.GPTImages.OPENAI_API_KEY"
 MAX_BLOB_BYTES = 2560  # CRED_MAX_CREDENTIAL_BLOB_SIZE
+ENV_SOURCE = "OPENAI_API_KEY environment variable"
+STORE_SOURCE = "Windows Credential Manager"
+PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-SETUP_HINT = (
-    "No OpenAI API key found for Sunburst Batch mode. Either set the OPENAI_API_KEY "
-    "environment variable, or store the key once with the included helper: "
-    "<ComfyUI python> custom_nodes/comfyui-gpt-images/setup_credentials.py set "
-    "(see the README). Then restart ComfyUI if you used the environment variable."
-)
+
+def helper_command(action: str = "set") -> str:
+    """The exact command for this install: ComfyUI's own Python and this package's helper."""
+    script = os.path.join(PACKAGE_DIR, "setup_credentials.py")
+    return f'"{sys.executable}" "{script}" {action}'
+
+
+def setup_hint() -> str:
+    if sys.platform != "win32":
+        return (
+            "No OpenAI API key found for Sunburst Batch mode. Set the OPENAI_API_KEY environment "
+            "variable, then restart ComfyUI."
+        )
+    return (
+        "No OpenAI API key found for Sunburst Batch mode. Store it once by running this in a terminal: "
+        f"{helper_command('set')}  Or set the OPENAI_API_KEY environment variable and restart ComfyUI."
+    )
 
 
 class CredentialError(RuntimeError):
     pass
+
+
+class NoKeyError(CredentialError):
+    """Neither the environment variable nor the stored entry exists."""
+
+
+class StoredKeyInvalid(CredentialError):
+    """The Credential Manager entry exists but cannot be used."""
 
 
 def decode_blob(blob: bytes) -> str:
@@ -169,13 +191,30 @@ def delete_store() -> bool:
 
 
 def resolve_api_key(environ=None, store_reader=None) -> tuple[str, str]:
-    """Return (key, source). Raises CredentialError with setup instructions if none."""
+    """Return (key, source).
+
+    Raises NoKeyError if there is no key at all, StoredKeyInvalid if the stored entry
+    is unusable, and CredentialError if the environment variable is malformed (that
+    one is the user's to fix; the node never falls back from it).
+    """
     environ = os.environ if environ is None else environ
     value = environ.get(ENV_VAR, "").strip()
     if value:
-        return check_syntax(value), "OPENAI_API_KEY environment variable"
+        try:
+            return check_syntax(value), ENV_SOURCE
+        except CredentialError as exc:
+            raise CredentialError(
+                f"The OPENAI_API_KEY environment variable is not a usable key: {exc} "
+                "Fix or remove the variable, then restart ComfyUI."
+            ) from None
     reader = _store_read if store_reader is None else store_reader
-    stored = reader()
+    try:
+        stored = reader()
+    except CredentialError as exc:
+        raise StoredKeyInvalid(str(exc)) from None
     if stored:
-        return check_syntax(stored.strip()), "Windows Credential Manager"
-    raise CredentialError(SETUP_HINT)
+        try:
+            return check_syntax(stored.strip()), STORE_SOURCE
+        except CredentialError as exc:
+            raise StoredKeyInvalid(f"The stored key is not usable: {exc}") from None
+    raise NoKeyError(setup_hint())

@@ -18,10 +18,17 @@ class Recorder(http.server.BaseHTTPRequestHandler):
     calls = []
     replies = []
 
+    def do_GET(self):
+        Recorder.calls.append((self.path, dict(self.headers), b""))
+        self._reply()
+
     def do_POST(self):
         length = int(self.headers["Content-Length"])
         body = self.rfile.read(length)
         Recorder.calls.append((self.path, dict(self.headers), body))
+        self._reply()
+
+    def _reply(self):
         status, payload = Recorder.replies.pop(0)
         data = json.dumps(payload).encode()
         self.send_response(status)
@@ -95,6 +102,21 @@ class SubmitTests(unittest.TestCase):
                 batch_http.submit(sample_request(), KEY, connect=server.connect)
         self.assertEqual(len(Recorder.calls), 2)
 
+    def test_upload_401_is_key_rejected(self):
+        Recorder.replies = [(401, {"error": {"message": "Incorrect API key provided"}})]
+        with LocalServer() as server:
+            with self.assertRaises(batch_http.KeyRejected) as caught:
+                batch_http.submit(sample_request(), KEY, connect=server.connect)
+        self.assertFalse(caught.exception.ambiguous)
+        self.assertEqual(len(Recorder.calls), 1)
+
+    def test_create_401_is_not_treated_as_a_fresh_key_problem(self):
+        Recorder.replies = [(200, {"id": "file-abc"}), (401, {"error": {"message": "nope"}})]
+        with LocalServer() as server:
+            with self.assertRaises(batch_http.BatchError) as caught:
+                batch_http.submit(sample_request(), KEY, connect=server.connect)
+        self.assertNotIsInstance(caught.exception, batch_http.KeyRejected)
+
     def test_redirect_is_not_followed(self):
         Recorder.replies = [(307, {"location": "elsewhere"})]
         with LocalServer() as server:
@@ -102,6 +124,39 @@ class SubmitTests(unittest.TestCase):
                 batch_http.submit(sample_request(), KEY, connect=server.connect)
         self.assertIn("redirect", str(caught.exception))
         self.assertEqual(len(Recorder.calls), 1)
+
+
+class CheckKeyTests(unittest.TestCase):
+    def check(self, status, payload):
+        Recorder.replies = [(status, payload)]
+        with LocalServer() as server:
+            batch_http.check_key(KEY, connect=server.connect)
+
+    def test_accepted_key(self):
+        self.check(200, {"object": "list", "data": []})
+        (path, headers, _), = Recorder.calls
+        self.assertEqual(path, "/v1/batches?limit=1")
+        self.assertEqual(headers["Authorization"], f"Bearer {KEY}")
+
+    def test_rejected_key(self):
+        with self.assertRaises(batch_http.KeyRejected):
+            self.check(401, {"error": {"message": "Incorrect API key"}})
+
+    def test_key_without_batch_permission(self):
+        with self.assertRaises(batch_http.KeyNotAllowed) as caught:
+            self.check(403, {"error": {"message": "insufficient permissions"}})
+        self.assertIn("Batches and Files", str(caught.exception))
+
+    def test_server_error_is_neither(self):
+        with self.assertRaises(batch_http.BatchError) as caught:
+            self.check(500, {"error": {"message": "boom"}})
+        self.assertNotIsInstance(caught.exception, (batch_http.KeyRejected, batch_http.KeyNotAllowed))
+        self.assertIn("not saved", str(caught.exception))
+
+    def test_no_network(self):
+        with self.assertRaises(batch_http.BatchError) as caught:
+            batch_http.check_key(KEY, connect=lambda: FakeConnection("connect"))
+        self.assertIn("not saved", str(caught.exception))
 
 
 class FakeConnection:

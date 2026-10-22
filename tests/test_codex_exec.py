@@ -70,6 +70,9 @@ class GenerateTests(unittest.TestCase):
             self.assertIn(flag, args)
         self.assertEqual(args[args.index("--sandbox") + 1], "workspace-write")
         self.assertEqual(args[args.index("--enable") + 1], "image_generation")
+        self.assertEqual(args[args.index("-m") + 1], "gpt-6-luna")
+        self.assertEqual(args[args.index("-c") + 1], 'model_reasoning_effort="low"')
+        self.assertIn("exact error message", seen["stdin"])
         self.assertEqual(args[-2:], ["--image", ref])
         self.assertEqual(args[args.index("--image") - 1], "-")
 
@@ -128,6 +131,31 @@ class GenerateTests(unittest.TestCase):
         with self.assertRaises(codex_exec.CodexError) as caught:
             codex_exec.check_login(self.codex)
         self.assertIn("API key", str(caught.exception))
+
+
+class FailureMessageTests(unittest.TestCase):
+    def explain(self, details, errors=()):
+        events = codex_exec.EventLog()
+        events.errors.extend(errors)
+        return codex_exec.explain_failure({"status": "failed", "image_path": "", "details": details}, events, 0)
+
+    def test_safety_wordings_are_named(self):
+        for text in [
+            "The built-in image tool blocked generation under its safety system.",
+            "The image tool blocked the generation under its safety policy.",
+            "moderation_blocked: category sexual",
+        ]:
+            message = self.explain(text)
+            self.assertIn("safety check blocked", message, text)
+            self.assertIn(text, message)  # Codex's exact words stay in the message
+
+    def test_unavailable_model_is_named(self):
+        message = self.explain("", ["The model gpt-6-luna is not supported when using Codex with a ChatGPT account."])
+        self.assertIn("cannot use gpt-6-luna", message)
+
+    def test_codes_match_whole_numbers_only(self):
+        self.assertNotIn("usage limit", self.explain("finished task 14290 without image"))
+        self.assertIn("usage limit", self.explain("HTTP 429 Too Many Requests"))
 
 
 class InstructionTests(unittest.TestCase):

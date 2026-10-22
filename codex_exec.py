@@ -1,9 +1,10 @@
 """Subscription mode: one image through the Codex CLI and the user's ChatGPT sign-in.
 
-Mirrors the command proven in the live test (Codex CLI 0.163.0-alpha.11.1):
+Mirrors the command proven in the live test (Codex CLI 0.163.0-alpha.11.1), with the
+agent model now set explicitly (v2) instead of Codex's unnamed default:
 
     codex exec --json --ephemeral --ignore-user-config --enable image_generation
-        --skip-git-repo-check --sandbox workspace-write -c model_reasoning_effort="low"
+        --skip-git-repo-check -m gpt-6-luna --sandbox workspace-write -c model_reasoning_effort="low"
         --cd <run dir> --output-schema <schema> --output-last-message <result> - [--image <ref>]...
 
 with the instruction on stdin. In that test the exec events carried no image
@@ -29,6 +30,8 @@ from collections import deque
 from dataclasses import dataclass, field
 
 TIMEOUT_SECONDS = 15 * 60
+AGENT_MODEL = "gpt-6-luna"  # Codex docs: "most efficient model for focused, high-volume tasks"
+AGENT_REASONING = "low"  # the lowest documented level ("Light")
 MAX_REFERENCES = 5  # Codex's built-in image tool limit in the tested build; version dependent
 MAX_REFERENCE_BYTES = 50_000_000  # Codex's bundled image-tool notes: input images "must be under 50MB"
 STRIPPED_ENV = ("OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL")
@@ -50,7 +53,9 @@ RULES = (
     "Use the built-in tool only. Do not browse, inspect the project, delegate, use API scripts, "
     "or make additional generation attempts. If unavailable or blocked, report failure without a "
     "fallback. Return the absolute path of the actual generated image in the required JSON response; "
-    "do not copy or re-encode it. Success requires a saved image. Keep details brief."
+    "do not copy or re-encode it. Success requires a saved image. If the image tool fails or blocks "
+    "the request, copy its exact error message, including any error code and category, into details. "
+    "Keep other details brief."
 )
 
 
@@ -148,7 +153,8 @@ def build_command(codex: str, run_dir: str, schema_path: str, result_path: str, 
     command = [
         codex, "exec", "--json", "--ephemeral", "--ignore-user-config",
         "--enable", "image_generation", "--skip-git-repo-check",
-        "--sandbox", "workspace-write", "-c", 'model_reasoning_effort="low"',
+        "-m", AGENT_MODEL,
+        "--sandbox", "workspace-write", "-c", f'model_reasoning_effort="{AGENT_REASONING}"',
         "--cd", run_dir, "--output-schema", schema_path, "--output-last-message", result_path, "-",
     ]
     for path in reference_paths:
@@ -298,8 +304,13 @@ def explain_failure(report, events: EventLog, exit_code: int | None) -> str:
         details = events.last_agent_message.strip()
     problems = events.problems()
     combined = f"{details} {problems}".lower()
-    if "moderation" in combined:
-        lead = "OpenAI's moderation blocked this image. Subscription mode has no moderation setting."
+    if any(word in combined for word in ("moderation", "safety", "policy", "blocked")):
+        lead = (
+            "OpenAI's safety check blocked this image. Subscription mode has no moderation setting; "
+            "the same prompt can pass on another try, or try rewording it."
+        )
+    elif AGENT_MODEL in combined and any(w in combined for w in ("not supported", "unavailable", "not available", "does not exist", "unknown model")):
+        lead = f"Codex cannot use {AGENT_MODEL} with this account."
     elif "usage limit" in combined or "rate limit" in combined or re.search(r"\b429\b", combined):
         lead = "Your Codex usage limit appears to be reached."
     elif "unauthorized" in combined or "not logged in" in combined or re.search(r"\b401\b", combined):

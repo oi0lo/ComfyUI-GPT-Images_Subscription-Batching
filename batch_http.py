@@ -25,9 +25,18 @@ MAX_RESPONSE_BYTES = 1_000_000
 class BatchError(RuntimeError):
     """Submission failed. `ambiguous` means a batch may exist despite the error."""
 
-    def __init__(self, message: str, ambiguous: bool = False):
+    def __init__(self, message: str, ambiguous: bool = False, status: int | None = None):
         super().__init__(message)
         self.ambiguous = ambiguous
+        self.status = status
+
+
+class KeyRejected(BatchError):
+    """OpenAI answered 401: the key is wrong, expired or revoked. Nothing was created."""
+
+
+class KeyNotAllowed(BatchError):
+    """OpenAI answered 403 to the key check: the key may not use the Batch API."""
 
 
 def _proxy_from_env() -> tuple[str, int] | None:
@@ -90,7 +99,7 @@ def _read_json(response: http.client.HTTPResponse, api_key: str) -> dict:
     if 300 <= status < 400:
         raise BatchError(f"Unexpected redirect from OpenAI (HTTP {status}); not followed.")
     if status != 200:
-        raise BatchError(redact(_api_error_text(status, body), api_key))
+        raise BatchError(redact(_api_error_text(status, body), api_key), status=status)
     if len(body) > MAX_RESPONSE_BYTES:
         raise BatchError("OpenAI response was unexpectedly large.")
     try:
@@ -147,6 +156,10 @@ def upload_jsonl(request, api_key: str, connect=default_connection) -> str:
             raise BatchError(
                 f"Network error {where}: {exc}. No batch was created; it is safe to queue again."
             ) from None
+        except BatchError as exc:
+            if exc.status == 401:  # refused before anything was stored: safe to try another key
+                raise KeyRejected(str(exc), status=401) from None
+            raise
     finally:
         connection.close()
     file_id = payload.get("id")
@@ -194,6 +207,37 @@ def create_batch(file_id: str, api_key: str, connect=default_connection) -> str:
             ambiguous=True,
         )
     return batch_id
+
+
+def check_key(api_key: str, connect=default_connection) -> None:
+    """One free request: list at most one batch. Uses the same permission Batch mode needs.
+
+    Returns normally if OpenAI accepts the key. Raises KeyRejected (401), KeyNotAllowed (403)
+    or BatchError (anything else, including no network). Never retried.
+    """
+    connection = connect()
+    try:
+        try:
+            connection.putrequest("GET", "/v1/batches?limit=1", skip_accept_encoding=True)
+            for name, value in _common_headers(api_key):
+                connection.putheader(name, value)
+            connection.endheaders()
+            response = connection.getresponse()
+            _read_json(response, api_key)
+        except (OSError, http.client.HTTPException) as exc:
+            raise BatchError(f"Could not reach OpenAI to check the key ({exc}). The key was not saved.") from None
+        except BatchError as exc:
+            if exc.status == 401:
+                raise KeyRejected("OpenAI rejected this key.", status=401) from None
+            if exc.status == 403:
+                raise KeyNotAllowed(
+                    "OpenAI accepted this key but it may not use the Batch API. In your OpenAI key "
+                    "settings, allow Batches and Files for it, or use another key.",
+                    status=403,
+                ) from None
+            raise BatchError(f"OpenAI could not check the key: {exc} The key was not saved.", status=exc.status) from None
+    finally:
+        connection.close()
 
 
 def submit(request, api_key: str, connect=default_connection) -> str:

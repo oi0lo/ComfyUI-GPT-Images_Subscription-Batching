@@ -1,142 +1,128 @@
-# ComfyUI GPT Images: Subscription + Sunburst Batching
+# ComfyUI GPT Images (version 2)
 
-A ComfyUI custom node with two independent ways to generate images through OpenAI:
+One ComfyUI node, **GPT Images: Subscription / Batching gpt-image-2.5 sunburst**, with two modes:
 
-| Mode | Authentication and usage | What the node returns |
-| --- | --- | --- |
-| **Subscription** | Codex CLI, signed in with a ChatGPT account. Subject to the account's Codex allowances, limits, and applicable charges. | An `IMAGE` output when generation finishes. |
-| **Sunburst Batch** | An OpenAI **Platform API key**. Uses the Batch API and your API account's billing. | A `batch_id` and `batch_url` immediately after the job is submitted. **No image is downloaded.** |
+| Mode | What it does | Who pays | The node finishes when |
+| --- | --- | --- | --- |
+| **Subscription** | Generates one image through the Codex CLI with your ChatGPT sign-in (agent model GPT-6 Luna, low reasoning) and returns it as an IMAGE. | Your Codex allowance (ChatGPT subscription) | the image is loaded |
+| **Sunburst Batch** | Packs prompt, settings and references into one OpenAI Batch request (Luna on `/v1/responses`, with `gpt-image-2.5-sunburst` as the image tool) and creates the batch job. | Your OpenAI API balance, at Batch prices | OpenAI confirms the batch with an id |
 
-The node is named **GPT Images: Subscription / Batching gpt-image-2.5 sunburst** in the **GPT Images** category. Only the selected mode runs.
+Only the selected mode runs. Neither mode uses ComfyUI credits or OpenRouter.
 
-> **Early release (v1.0.0):** This project relies on the Codex CLI's image-generation functionality and on specific OpenAI API models and parameters. Those interfaces, account entitlements, and availability may change. This is an independent community project, not an official OpenAI or ComfyUI integration.
+Pure Python: the standard library plus what ComfyUI already ships (PyTorch, NumPy, Pillow). No pip installs, no JavaScript, no frontend extension.
 
-## Features
+## What's new in version 2
 
-- One node with a mode-dependent interface.
-- Optional reference images, with automatically growing input sockets (`image_1`, `image_2`, etc.).
-- **Subscription:** one image-generation task via the Codex CLI and an existing ChatGPT sign-in. The resulting image is loaded into ComfyUI.
-- **Sunburst Batch:** uploads a single JSONL request to `/v1/files`, creates a Batch job for `/v1/responses`, and returns its ID and dashboard link. Uses `gpt-6-luna` with one `image_generation` tool call targeting `gpt-image-2.5-sunburst`.
-- Sunburst aspect-ratio, resolution, and quality presets, including portrait sizes.
-- Reference images are encoded as lossless PNG where possible, with JPEG quality 95 fallback when required by size limits.
-- No frontend JavaScript or separate Python package installation. Uses Python's standard library and packages that ship with ComfyUI (PyTorch, NumPy, Pillow).
+- **Key window.** The first time Batch mode runs without a key, Windows' own credential window opens. Paste the key; it is checked once with OpenAI and stored in Windows Credential Manager. No terminal needed.
+- **Notice in the node.** In Batch mode a grey notice explains where the key is kept.
+- **New size list.** Seven aspect ratios with your size table; 1:1 Square is the default.
+- **Subscription mode** runs Codex with GPT-6 Luna at low reasoning, and a blocked image shows Codex's exact reason.
+
+Upgrading from version 1: replace the whole folder and restart ComfyUI. Workflows saved with version 1 keep their old resolution value, which no longer exists; pick the resolution again (ComfyUI marks it as "Value not in list").
 
 ## Requirements
 
-- A compatible **ComfyUI** build with V3 nodes, `DynamicCombo` and `Autogrow`. The original implementation was exercised with ComfyUI **v0.42.4** and frontend **1.55.18**; older builds may not work.
-- **Subscription mode:** Codex CLI installed, its `image_generation` feature available, and signed in through **ChatGPT** rather than an API key. Developed against `codex-cli 0.163.0-alpha.11.1`. Feature and usage availability depend on the installed version and account.
-- **Sunburst Batch mode:** an OpenAI Platform API key with access to the required models and Batch API. API billing is **separate** from ChatGPT subscriptions.
+- ComfyUI with the V3 node features DynamicCombo and Autogrow. Tested with ComfyUI **v0.42.4** and its frontend **1.55.18**.
+- Subscription mode: the **Codex CLI**, signed in with ChatGPT, with access to GPT-6 Luna. On Windows the ChatGPT desktop app installs it. Built against `codex-cli 0.163.0-alpha.11.1`.
+- Sunburst Batch mode: an **OpenAI API key** from your Platform account. A restricted key needs access to Batches and Files.
 
-## Installation
+## Install
 
-Clone this repository directly into ComfyUI's `custom_nodes` directory:
+Clone the repository into ComfyUI's `custom_nodes` directory:
 
 ```bash
 cd /path/to/ComfyUI/custom_nodes
 git clone https://github.com/oi0lo/ComfyUI-GPT-Images_Subscription-Batching.git comfyui-gpt-images
 ```
 
-Alternatively, download the repository ZIP and extract **its contents** into `ComfyUI/custom_nodes/comfyui-gpt-images/`. There should be an `__init__.py` directly inside that directory, not another nested project directory.
+Alternatively, install from a downloaded ZIP:
 
-Restart ComfyUI. Search for **GPT Images**, **sunburst**, or **codex** to add the node. There is no `requirements.txt` to install because the node uses ComfyUI's existing dependencies.
+1. Unzip so that this folder sits at `custom_nodes\comfyui-gpt-images` inside your ComfyUI folder.
+   For ComfyUI Desktop that is inside the base folder chosen at install, for example
+   `D:\Comfy\Local\ComfyUI\custom_nodes\comfyui-gpt-images`.
+2. Restart ComfyUI. The node is in the **GPT Images** category; searching "sunburst" or "codex" also finds it.
 
-### Configure Subscription mode
+## API key (Sunburst Batch mode only)
 
-1. Install the [Codex CLI](https://developers.openai.com/codex/cli/) and verify that the `codex` executable is available, or that its app-managed Windows executable can be found.
-2. Run `codex login` and choose **ChatGPT sign-in**.
-3. Verify with `codex login status`. The node expects the message `Logged in using ChatGPT`.
-4. Select **Subscription**, enter a prompt, and connect the `image` output to **Preview Image** or **Save Image**.
+**On Windows, nothing to set up in advance.** The first Batch run without a key opens Windows' credential window ("ComfyUI GPT Images: OpenAI API key"):
 
-The node removes `OPENAI_API_KEY`, `CODEX_API_KEY`, and `OPENAI_BASE_URL` from the spawned Codex process environment and checks its ChatGPT login. This is intended to avoid switching to API-key billing; it is **not** a guarantee about all possible Codex configurations or future versions. Codex usage counts against the applicable plan limits or credits. Subscription mode does not let you select the image model, resolution, or quality from node controls. Describe the desired format in the prompt.
+1. Paste the key into the **Password** field and press OK. The user name field is only a label.
+2. The node checks the key with one free request to OpenAI (it lists your batches). If OpenAI refuses it, the window opens again; if your network is down, nothing is saved.
+3. An accepted key is stored in Windows Credential Manager as `ComfyUI.GPTImages.OPENAI_API_KEY`, and the same run continues.
 
-### Configure Sunburst Batch mode
+Cancel ends the run without sending anything. If nothing is entered within 10 minutes, the window closes and the run ends. If OpenAI later rejects the stored key (expired or revoked), the window opens again so you can paste a new one; the refused upload created nothing, so the new upload cannot make a duplicate.
 
-The key is read from `OPENAI_API_KEY`, or on Windows from an optional Windows Credential Manager entry. **Do not put an API key in the prompt, workflow, README, or repository.**
+What the notice in the node says is exact: Windows Credential Manager stores the key for your Windows user; it is never saved in the node, the workflow, or ComfyUI's files and logs; the node reads it only to send requests to OpenAI (the key check and the batch upload). Programs running as your Windows user can still read Credential Manager entries.
 
-**Option A: Windows Credential Manager**
+**Other ways**, still supported:
 
-Open PowerShell and run the included helper using ComfyUI's Python (adjust these example paths):
+- The included helper, from a terminal with ComfyUI's own Python (the error message prints this exact command for your install):
+  ```
+  "D:\Comfy\Local\ComfyUI\.venv\Scripts\python.exe" "D:\Comfy\Local\ComfyUI\custom_nodes\comfyui-gpt-images\setup_credentials.py" set
+  ```
+  `status` shows which key source the node will use (never the key itself); `delete` removes the stored key. You can also remove it in Windows' Credential Manager under Windows Credentials.
+- The `OPENAI_API_KEY` environment variable. It takes priority over the stored key. Set it for your Windows user, then fully quit and reopen ComfyUI. If OpenAI rejects a key from the variable, the node tells you to fix or remove the variable; it does not open the window. Every program you run can see this variable, and OpenAI's standard libraries use it automatically.
 
-```powershell
-& "D:\Comfy\Local\ComfyUI\.venv\Scripts\python.exe" "D:\Comfy\Local\ComfyUI\custom_nodes\comfyui-gpt-images\setup_credentials.py" set
+On Linux and macOS there is no key window: use the environment variable.
+
+## Codex sign-in (Subscription mode only)
+
+Run `codex login` once in a terminal and sign in with ChatGPT; `codex login status` should then say `Logged in using ChatGPT`. The node checks this the first time Subscription mode runs in a ComfyUI session and refuses any other kind of login (for example an API key), so Subscription mode cannot bill your API account. It also never passes `OPENAI_API_KEY` to Codex.
+
+## Wiring
+
+1. Add **GPT Images: Subscription / Batching gpt-image-2.5 sunburst**.
+2. Optional references: connect **Load Image** (or any IMAGE output) to `image_1`. A new socket appears each time you connect one.
+3. Subscription mode: connect `image` to **Preview Image** or **Save Image**.
+4. Batch mode: to see the id and link, connect `batch_url` (or `batch_id`) to **Preview as Text**.
+5. Set `mode`, write the prompt, set the run count, and press Run.
+
+## Controls and outputs
+
+- **mode**: Subscription or Sunburst Batch. Sunburst Batch shows more settings:
+  - **aspect_ratio**: `1:1 Square` (default), `16:9 Landscape`, `9:16 Portrait`, `4:5 Portrait`, `5:4 Landscape`, `3:2 Landscape`, `2:3 Portrait`.
+  - **resolution**: the sizes for that ratio, each with its megapixels and a classification label; the default is the largest. Labels such as "Recommended" and "Documented example" are this project's classification. OpenAI's docs list "common sizes" and call outputs above 3,686,400 pixels (2560 x 1440) experimental; every "Experimental" label here follows that rule.
+  - **quality**: auto, low, medium, high, xhigh, max. Default max.
+  - **about your API key**: the notice. It is only text; anything typed into it is ignored.
+- **prompt**: sent exactly as written. In Batch mode it goes to Luna, and OpenAI's docs say Luna rewrites it before Sunburst sees it; the `revised_prompt` field in the batch output file shows what Sunburst actually got.
+- **image_1, image_2, ...**: optional references, used in socket order. Every image inside a connected batch counts as one reference.
+- Outputs: **image** (Subscription mode), **batch_id** and **batch_url** (Batch mode). The outputs a mode does not produce are skipped, so anything connected to them simply does not run.
+
+### Every Run is a new job
+
+Each queued run makes a new generation (Subscription) or a new paid batch job (Batch), even with unchanged inputs. Use the run count for several images. To work on other parts of the workflow without generating, mute or bypass this node; nodes after it then get no image.
+
+## What happens in each mode
+
+**Subscription.** The node finds Codex (the newest copy installed by the ChatGPT app, otherwise `codex` on PATH), checks the sign-in, writes the references as lossless PNGs into its own temporary folder, and runs one Codex task with GPT-6 Luna at low reasoning. It takes the image from Codex's folder for that task (`.codex\generated_images\<task id>` in your user folder), checks that the file is new and not one of the inputs, and loads it. The temporary folder is then deleted; the generated image stays where Codex saved it. If the image is blocked, the error names it as a safety block and quotes Codex's exact reason; the same prompt can pass on another try. The node gives up after 15 minutes, and Stop in ComfyUI ends the Codex process. Nothing is ever retried automatically.
+
+**Sunburst Batch.** The node gets the API key (asking for it if needed), encodes the references, builds one JSONL line, checks its exact size, uploads it and creates the batch. It does not poll or download results: get the output file from the batch page (`batch_url`). If the network fails after the batch request was sent, the error says the outcome is unknown; check your batches page before queueing again.
+
+## Limits and size checks
+
+- **Batch file: at most 200 MB.** That is OpenAI's documented Batch input limit; the documented per-request limit (512 MB) is higher. References are encoded as lossless PNG first. If the request would exceed 200 MB, all references are encoded again as JPEG (quality 95, full colour resolution) and checked again; if it is still too large, the node stops with an error. Roughly 6 to 8 PNG references at 4K fit, depending on the image.
+- **Subscription: at most 5 references, each under 50 MB** (the limit in Codex's own image-tool notes). The same PNG-then-JPEG rule applies.
+- References must be RGB images with 3 channels, as Load Image produces.
+- Files on disk are never changed. The node works only on the pixels ComfyUI passes in and writes only into its own temporary folder.
+- Subscription mode has no size, quality or moderation settings. Ask for an aspect ratio in the prompt if you need one.
+
+## Tests
+
+Offline tests use stand-ins for Codex, OpenAI and the key window, and never generate anything. Run them with ComfyUI's Python from the `tests` folder:
+
+```
+cd "D:\Comfy\Local\ComfyUI\custom_nodes\comfyui-gpt-images\tests"
+"D:\Comfy\Local\ComfyUI\.venv\Scripts\python.exe" -m unittest
 ```
 
-It prompts for the key with hidden input and stores it for your Windows account under `ComfyUI.GPTImages.OPENAI_API_KEY`. Substitute `status` to inspect which key source is selected, or `delete` to remove the saved entry. For portable ComfyUI, substitute its `python_embeded\python.exe` for the virtual-environment Python path.
+The Codex tests use a POSIX shell script as the stand-in and are skipped on Windows.
 
-**Option B: Environment variable (Windows, macOS, Linux)**
+## What has and has not been tested
 
-Set `OPENAI_API_KEY` in the environment **that launches ComfyUI**, then restart ComfyUI. For example, in a bash shell:
+Tested on Linux: the offline tests, and the node loaded and run inside ComfyUI v0.42.4 with its real frontend, against stand-ins for Codex, OpenAI, the key window and Credential Manager (both modes, references, the JPEG fallback, Stop, sign-in and safety errors, stale settings, and every key case: no key, wrong key, rejected stored key, rejected variable, Cancel).
 
-```bash
-export OPENAI_API_KEY="your-api-key"
-```
+Run for real on Windows (version 1): Subscription generations through the node, with and without references. Not yet tested on Windows: the key window itself and saving to Credential Manager. Not yet run for real: GPT-6 Luna through Codex on your account, and a real Batch submission from the node.
 
-The environment variable takes priority over Windows Credential Manager. A wrongly configured environment key does not fall back to the stored key. Environment variables may be accessible to other processes launched under the same user account.
+## License and project status
 
-## Use the node
-
-1. Add **GPT Images: Subscription / Batching gpt-image-2.5 sunburst** to your graph.
-2. Optionally connect one or more `IMAGE` outputs to `image_1`, `image_2`, and subsequent inputs as they appear. All images within a connected image batch count as individual references, in socket order.
-3. Enter a prompt and choose **Subscription** or **Sunburst Batch**.
-4. For **Subscription**, connect `image` to **Preview Image** or **Save Image**.
-5. For **Sunburst Batch**, choose `aspect_ratio`, `resolution`, and `quality`, then connect `batch_url` or `batch_id` to a compatible string display node, such as **Preview as Text**, to inspect the submitted job.
-6. Queue the workflow. Each new queued run can create another image or **another billable Batch job**, even if the inputs are unchanged. Avoid accidental repeated submissions.
-
-### Outputs
-
-| Output | Subscription | Sunburst Batch |
-| --- | --- | --- |
-| `image` | Finished `IMAGE` tensor | Blocked / unavailable |
-| `batch_id` | Blocked / unavailable | OpenAI batch ID |
-| `batch_url` | Blocked / unavailable | Link to the batch dashboard |
-
-Batch mode is asynchronous: this node **does not** wait for completion, retrieve the output JSONL, or decode the image. Open `batch_url` and retrieve the output file through the OpenAI Platform after processing finishes. The URL points to the account's dashboard, so you may need to sign in. See the [Batch API guide](https://developers.openai.com/api/docs/guides/batch).
-
-### Sunburst controls
-
-- **Aspect ratio:** `1:1`, `5:4`, `4:3`, `3:2`, `16:10`, `16:9`, `2:1`, `21:9`, and `3:1`, with landscape and portrait orientations where applicable.
-- **Resolution:** four preset tiers per ratio. The maximum preset is **3840 × 2160** for 16:9, **2880 × 2880** for square, with other maxima depending on aspect ratio. Larger sizes are marked experimental where appropriate.
-- **Quality:** `auto`, `low`, `medium`, `high`, `xhigh`, `max` (default: `max`).
-- **Prompt:** sent as written in the Batch request to the Responses model. The Responses image tool may revise it before generation; check `revised_prompt` in the output when present.
-
-Sunburst requests use `output_format="png"`, `background="auto"`, and `moderation="low"` in the image-generation tool configuration; these are fixed in v1, not adjustable from the node interface.
-
-## Limits, behavior, and privacy
-
-- **Subscription:** up to **5** individual reference images in the tested Codex build, each encoded image **under 50 MB**. This limit is version-dependent. Execution times out after **15 minutes**, and interrupting ComfyUI stops the spawned Codex process.
-- **Batch:** one JSONL request per run, up to **200 MB**, including base64-encoded references. The code checks this before upload. Failed requests are not automatically retried; if creation fails after transmission, check the dashboard before queuing again to avoid duplicates.
-- **Image encoding:** RGB images are transferred from ComfyUI, encoded first as PNG, and re-encoded as JPEG quality 95 if necessary to fit the applicable limit. The node does not edit your existing source image files.
-- **Data disclosure:** both modes transmit prompts and any connected reference images to OpenAI services. Subscription mode also invokes a local Codex agent process and stores generated images in Codex's own image directory. Do not use sensitive prompts or images unless that data transfer is acceptable to you.
-- **Authentication:** the node never places the Batch API key in a ComfyUI node input or saved workflow. The optional Windows Credential Manager entry is accessible to software running as the same Windows user.
-- **Costs:** OpenAI API charges can apply when a Batch job is submitted. ChatGPT subscription pricing and Codex usage limits are separate, and using Codex may also consume credits depending on your plan. See [Codex plan usage](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan) and [Batch API documentation](https://developers.openai.com/api/docs/guides/batch).
-
-## Troubleshooting
-
-| Symptom | Check |
-| --- | --- |
-| Node missing in ComfyUI | Check that `__init__.py` is at the top of the custom-node folder; update ComfyUI to a build supporting V3 nodes, `DynamicCombo`, and `Autogrow`; restart. |
-| `Codex CLI not found` | Install Codex CLI, verify `codex --version` (or app-managed Windows Codex), and restart ComfyUI. |
-| Codex sign-in rejected | Run `codex login status`. Sign in through ChatGPT, not an API key. |
-| Subscription ends with no image | Inspect ComfyUI logs, Codex access and limits, moderation messages, and the installed Codex version. |
-| Batch says no key found | Set `OPENAI_API_KEY` in ComfyUI's environment or use the Windows setup helper; fully restart if changing environment variables. |
-| Batch HTTP 401, 403, or 429 | Check your API key, project permissions, model access, quota, and rate limits. |
-| Batch job exists but no image is returned | Expected: Batch mode only submits the request. Check the dashboard for output/error files. |
-| References are too large | Resize images upstream or use fewer references. The JPEG fallback is automatic. |
-
-## Tests and compatibility
-
-The repository includes offline `unittest` tests with local stand-ins for Codex and HTTP, so they **do not** issue paid requests:
-
-```bash
-python -m unittest discover -s tests -v
-```
-
-**Release review:** 56 offline tests passed on Linux. Tests using POSIX shell stand-ins are skipped on Windows. The original project's README reports a ComfyUI v0.42.4 integration run on Linux against mock services, but the following paths have **not** been independently verified for this publication: actual Windows Credential Manager and Codex execution, reference-image generation against live Codex, and creation of a real OpenAI Batch job from the node. Treat this as an initial community release, not production-validated integration software.
-
-## Versioning and community distribution
-
-This repository is installable by cloning it into `custom_nodes`. **Publishing to GitHub does not automatically list it in ComfyUI Manager or the ComfyUI Registry.** A future Registry listing needs a registered publisher account, its actual `PublisherId`, and a separate publish step. No registry publisher ID or key is bundled in this repository.
-
-## License and acknowledgements
-
-Licensed under the **MIT License**, see [LICENSE](LICENSE). This license covers this project's source code, not OpenAI models, APIs, services, or trademarks. OpenAI, ChatGPT, Codex, GPT Images, and ComfyUI are names of their respective owners. This project is independent and unaffiliated with OpenAI and Comfy-Org.
+MIT licensed. This is an independent community-made node, not an official OpenAI or ComfyUI integration. Model names, CLI behavior and account access may change. Batch API charges are separate from ChatGPT subscription usage.

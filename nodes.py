@@ -21,13 +21,20 @@ import comfy.model_management as model_management
 from comfy_api.latest import io
 from comfy_execution.graph_utils import ExecutionBlocker
 
-from . import batch_http, batch_request, codex_exec, credentials, presets, references
+from . import (batch_http, batch_request, codex_exec, credentials, key_prompt, key_setup, presets,
+               references)
 
 log = logging.getLogger("comfyui-gpt-images")
 
 MODE_SUBSCRIPTION = "Subscription"
 MODE_BATCH = "Sunburst Batch"
 IMAGE_SOCKETS = [f"image_{i}" for i in range(1, 17)]
+KEY_WINDOW_TIMEOUT = 10 * 60
+KEY_NOTICE = (
+    "If Windows asks for your OpenAI API key: Windows Credential Manager stores it for your Windows user. "
+    "It is never saved in this node, the workflow, or ComfyUI's files and logs. The node reads it only to "
+    "send requests to OpenAI."
+)
 
 
 def _single(value, name: str):
@@ -66,7 +73,10 @@ class GPTImagesNode(io.ComfyNode):
                         "resolution",
                         options=list(presets.PRESETS[aspect]),
                         default=presets.default_resolution(aspect),
-                        tooltip="Output size in pixels. Sizes above 2560 x 1440 pixels are marked experimental.",
+                        tooltip=(
+                            "Output size in pixels. OpenAI's docs call outputs above 3,686,400 pixels "
+                            "(2560 x 1440) experimental."
+                        ),
                     )
                 ],
             )
@@ -100,6 +110,15 @@ class GPTImagesNode(io.ComfyNode):
                                     options=list(batch_request.QUALITIES),
                                     default="max",
                                     tooltip="Sunburst quality.",
+                                ),
+                                io.String.Input(
+                                    "api_key_notice",
+                                    display_name="about your API key",
+                                    multiline=True,
+                                    default="",
+                                    placeholder=KEY_NOTICE,
+                                    socketless=True,
+                                    tooltip=KEY_NOTICE + " (This box is only a notice; anything typed here is ignored.)",
                                 ),
                             ],
                         ),
@@ -188,7 +207,10 @@ class GPTImagesNode(io.ComfyNode):
                 if kind == "jpeg":
                     log.warning("[GPT Images] References were over 50 MB as PNG; sent as JPEG quality 95.")
                 paths = references.write_files(encoded, run_dir)
-            log.info("[GPT Images] Subscription: starting Codex with %d reference(s).", len(paths))
+            log.info(
+                "[GPT Images] Subscription: starting Codex (%s, %s reasoning) with %d reference(s).",
+                codex_exec.AGENT_MODEL, codex_exec.AGENT_REASONING, len(paths),
+            )
             try:
                 result = await codex_exec.generate(
                     codex, prompt, paths, run_dir, is_interrupted=model_management.processing_interrupted
@@ -202,11 +224,58 @@ class GPTImagesNode(io.ComfyNode):
             shutil.rmtree(run_dir, ignore_errors=True)
 
     @classmethod
+    async def _ask_for_key(cls, rejected: bool) -> str:
+        """Windows key window: paste, free check with OpenAI, save. Returns the accepted key."""
+        if not key_prompt.available():
+            if rejected:
+                raise credentials.CredentialError(
+                    "OpenAI rejected the stored key. Store a new one with: " + credentials.helper_command("set")
+                )
+            raise credentials.NoKeyError(credentials.setup_hint())
+
+        async def prompt(message: str):
+            try:
+                return await key_prompt.prompt_for_key(
+                    message, timeout=KEY_WINDOW_TIMEOUT, is_interrupted=model_management.processing_interrupted
+                )
+            except key_prompt.KeyPromptInterrupted:
+                model_management.throw_exception_if_processing_interrupted()
+                raise
+
+        async def validate(key: str) -> None:
+            await asyncio.to_thread(batch_http.check_key, key)
+
+        stored = []
+
+        def save(key: str) -> None:
+            try:
+                credentials.write_store(key)
+                stored.append(True)
+            except credentials.CredentialError as exc:  # the key works; only storing it failed
+                log.warning("[GPT Images] OpenAI accepted the key, but it could not be stored (%s). "
+                            "This run continues; you will be asked again next time.", exc)
+
+        log.info("[GPT Images] Waiting for the OpenAI API key to be entered in the Windows key window.")
+        key = await key_setup.obtain_key(prompt, validate, save, credentials.check_syntax, rejected=rejected)
+        if stored:
+            log.info("[GPT Images] OpenAI accepted the key; it is stored in Windows Credential Manager.")
+        return key
+
+    @classmethod
+    async def _get_key(cls) -> tuple[str, str]:
+        try:
+            return credentials.resolve_api_key()
+        except credentials.NoKeyError:
+            return await cls._ask_for_key(rejected=False), credentials.STORE_SOURCE
+        except credentials.StoredKeyInvalid:
+            return await cls._ask_for_key(rejected=True), credentials.STORE_SOURCE
+
+    @classmethod
     async def _batch(cls, prompt: str, refs: list, aspect: str, resolution: str, quality: str) -> str:
         width, height = presets.resolve(aspect, resolution)
         if quality not in batch_request.QUALITIES:
             raise ValueError(f"Unknown quality '{quality}'.")
-        api_key, source = credentials.resolve_api_key()
+        api_key, source = await cls._get_key()
 
         def fits(items) -> bool:
             model_management.throw_exception_if_processing_interrupted()  # Stop works while encoding
@@ -220,6 +289,18 @@ class GPTImagesNode(io.ComfyNode):
             "[GPT Images] Sunburst Batch: uploading %.1f MB (%d reference(s), %dx%d, quality %s, key from %s).",
             request.size / 1e6, len(encoded), width, height, quality, source,
         )
-        batch_id = await asyncio.to_thread(batch_http.submit, request, api_key)
+        try:
+            batch_id = await asyncio.to_thread(batch_http.submit, request, api_key)
+        except batch_http.KeyRejected:
+            # OpenAI refused the upload itself (401), so nothing exists yet and a second
+            # attempt with a new key cannot create a duplicate.
+            if source == credentials.ENV_SOURCE:
+                raise batch_http.BatchError(
+                    "OpenAI rejected the key in the OPENAI_API_KEY environment variable (it may have expired "
+                    "or been revoked). Nothing was created. Fix or remove the variable, then restart ComfyUI."
+                ) from None
+            api_key = await cls._ask_for_key(rejected=True)
+            log.info("[GPT Images] Sunburst Batch: uploading again with the new key.")
+            batch_id = await asyncio.to_thread(batch_http.submit, request, api_key)
         log.info("[GPT Images] Sunburst Batch: created %s", batch_id)
         return batch_id
