@@ -30,11 +30,6 @@ MODE_SUBSCRIPTION = "Subscription"
 MODE_BATCH = "Sunburst Batch"
 IMAGE_SOCKETS = [f"image_{i}" for i in range(1, 17)]
 KEY_WINDOW_TIMEOUT = 10 * 60
-KEY_NOTICE = (
-    "If Windows asks for your OpenAI API key: Windows Credential Manager stores it for your Windows user. "
-    "It is never saved in this node, the workflow, or ComfyUI's files and logs. The node reads it only to "
-    "send requests to OpenAI."
-)
 
 
 def _single(value, name: str):
@@ -110,15 +105,6 @@ class GPTImagesNode(io.ComfyNode):
                                     options=list(batch_request.QUALITIES),
                                     default="max",
                                     tooltip="Sunburst quality.",
-                                ),
-                                io.String.Input(
-                                    "api_key_notice",
-                                    display_name="about your API key",
-                                    multiline=True,
-                                    default="",
-                                    placeholder=KEY_NOTICE,
-                                    socketless=True,
-                                    tooltip=KEY_NOTICE + " (This box is only a notice; anything typed here is ignored.)",
                                 ),
                             ],
                         ),

@@ -1,4 +1,4 @@
-# ComfyUI GPT Images (version 2)
+# ComfyUI GPT Images (version 3)
 
 One ComfyUI node, **GPT Images: Subscription / Batching gpt-image-2.5 sunburst**, with two modes:
 
@@ -11,18 +11,19 @@ Only the selected mode runs. Neither mode uses ComfyUI credits or OpenRouter.
 
 Pure Python: the standard library plus what ComfyUI already ships (PyTorch, NumPy, Pillow). No pip installs, no JavaScript, no frontend extension.
 
-## What's new in version 2
+## What's new in version 3
 
-- **Key window.** The first time Batch mode runs without a key, Windows' own credential window opens. Paste the key; it is checked once with OpenAI and stored in Windows Credential Manager. No terminal needed.
-- **Notice in the node.** In Batch mode a grey notice explains where the key is kept.
-- **New size list.** Seven aspect ratios with your size table; 1:1 Square is the default.
-- **Subscription mode** runs Codex with GPT-6 Luna at low reasoning, and a blocked image shows Codex's exact reason.
+- **No API key notice in the node.** In ComfyUI's newer node design the notice box showed only its name and looked like a place to type the key. The key window itself says where the key is kept.
 
-Upgrading from version 1: replace the whole folder and restart ComfyUI. Workflows saved with version 1 keep their old resolution value, which no longer exists; pick the resolution again (ComfyUI marks it as "Value not in list").
+**Upgrading from version 2:** replace the whole folder and restart ComfyUI. Workflows saved with version 2 in Sunburst Batch mode open with an **empty prompt**: ComfyUI restores a node's values by position, and the removed box sat just before the prompt. Their other settings carry over. Copy those prompts before upgrading, or paste them again afterwards. A run with an empty prompt stops before anything is sent. Subscription-mode workflows are not affected.
+
+**Upgrading from version 1:** workflows saved with version 1 keep their old resolution value, which no longer exists; pick the resolution again (ComfyUI marks it as "Value not in list").
+
+Version 2 added the Windows key window (paste the key once; it is checked with OpenAI and stored in Windows Credential Manager), the seven-ratio size list with 1:1 Square as the default, GPT-6 Luna at low reasoning for Subscription mode, and Codex's exact reason when an image is blocked.
 
 ## Requirements
 
-- ComfyUI with the V3 node features DynamicCombo and Autogrow. Tested with ComfyUI **v0.42.4** and its frontend **1.55.18**.
+- ComfyUI with the V3 node features DynamicCombo and Autogrow. Tested with ComfyUI **v0.42.4** and its frontend **1.55.18**, in both the classic and the newer node design.
 - Subscription mode: the **Codex CLI**, signed in with ChatGPT, with access to GPT-6 Luna. On Windows the ChatGPT desktop app installs it. Built against `codex-cli 0.163.0-alpha.11.1`.
 - Sunburst Batch mode: an **OpenAI API key** from your Platform account. A restricted key needs access to Batches and Files.
 
@@ -52,7 +53,7 @@ Alternatively, install from a downloaded ZIP:
 
 Cancel ends the run without sending anything. If nothing is entered within 10 minutes, the window closes and the run ends. If OpenAI later rejects the stored key (expired or revoked), the window opens again so you can paste a new one; the refused upload created nothing, so the new upload cannot make a duplicate.
 
-What the notice in the node says is exact: Windows Credential Manager stores the key for your Windows user; it is never saved in the node, the workflow, or ComfyUI's files and logs; the node reads it only to send requests to OpenAI (the key check and the batch upload). Programs running as your Windows user can still read Credential Manager entries.
+What the key window says is exact: the key is checked once with OpenAI (free) and stored by Windows Credential Manager for your Windows user; it is never saved in the node, the workflow, or ComfyUI's files and logs. The node reads it only to send requests to OpenAI (the key check and the batch upload). Programs running as your Windows user can still read Credential Manager entries.
 
 **Other ways**, still supported:
 
@@ -83,7 +84,6 @@ Run `codex login` once in a terminal and sign in with ChatGPT; `codex login stat
   - **aspect_ratio**: `1:1 Square` (default), `16:9 Landscape`, `9:16 Portrait`, `4:5 Portrait`, `5:4 Landscape`, `3:2 Landscape`, `2:3 Portrait`.
   - **resolution**: the sizes for that ratio, each with its megapixels and a classification label; the default is the largest. Labels such as "Recommended" and "Documented example" are this project's classification. OpenAI's docs list "common sizes" and call outputs above 3,686,400 pixels (2560 x 1440) experimental; every "Experimental" label here follows that rule.
   - **quality**: auto, low, medium, high, xhigh, max. Default max.
-  - **about your API key**: the notice. It is only text; anything typed into it is ignored.
 - **prompt**: sent exactly as written. In Batch mode it goes to Luna, and OpenAI's docs say Luna rewrites it before Sunburst sees it; the `revised_prompt` field in the batch output file shows what Sunburst actually got.
 - **image_1, image_2, ...**: optional references, used in socket order. Every image inside a connected batch counts as one reference.
 - Outputs: **image** (Subscription mode), **batch_id** and **batch_url** (Batch mode). The outputs a mode does not produce are skipped, so anything connected to them simply does not run.
@@ -119,10 +119,6 @@ The Codex tests use a POSIX shell script as the stand-in and are skipped on Wind
 
 ## What has and has not been tested
 
-Tested on Linux: the offline tests, and the node loaded and run inside ComfyUI v0.42.4 with its real frontend, against stand-ins for Codex, OpenAI, the key window and Credential Manager (both modes, references, the JPEG fallback, Stop, sign-in and safety errors, stale settings, and every key case: no key, wrong key, rejected stored key, rejected variable, Cancel).
+Tested on Linux: the offline tests, and the node loaded and run inside ComfyUI v0.42.4 with its real frontend in both node designs, against stand-ins for Codex, OpenAI, the key window and Credential Manager (both modes, references, the JPEG fallback, Stop, sign-in and safety errors, stale settings, old workflows, and every key case: no key, wrong key, rejected stored key, rejected variable, Cancel).
 
-Run for real on Windows (version 1): Subscription generations through the node, with and without references. Not yet tested on Windows: the key window itself and saving to Credential Manager. Not yet run for real: GPT-6 Luna through Codex on your account, and a real Batch submission from the node.
-
-## License and project status
-
-MIT licensed. This is an independent community-made node, not an official OpenAI or ComfyUI integration. Model names, CLI behavior and account access may change. Batch API charges are separate from ChatGPT subscription usage.
+Run for real on Windows: Subscription generations through the node, with and without references (version 1); the key window, saving the key to Credential Manager, and a real Batch submission with two references (version 2). Not yet run for real: Subscription mode with GPT-6 Luna.

@@ -4,7 +4,7 @@ from comfy_api.latest import ComfyExtension, io
 
 from .nodes import GPTImagesNode
 
-__version__ = "2.0.0"
+__version__ = "3.0.0"
 
 
 class GPTImagesExtension(ComfyExtension):
