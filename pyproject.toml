@@ -1,0 +1,17 @@
+[project]
+name = "comfyui-gpt-images-subscription-batching"
+version = "1.0.0"
+description = "ComfyUI node for ChatGPT-authenticated Codex image generation and OpenAI Sunburst Batch submissions"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+keywords = ["comfyui", "custom-node", "codex", "image-generation", "openai", "batch-api"]
+dependencies = [] # NumPy, Pillow, and PyTorch are provided by ComfyUI.
+
+[project.urls]
+Repository = "https://github.com/oi0lo/ComfyUI-GPT-Images_Subscription-Batching"
+Issues = "https://github.com/oi0lo/ComfyUI-GPT-Images_Subscription-Batching/issues"
+
+# ComfyUI Registry distribution requires an actual publisher account first.
+# Add [tool.comfy] with its real PublisherId and DisplayName before publishing
+# there; do not use a made-up ID.
