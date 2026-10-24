@@ -7,6 +7,14 @@ import batch_request
 from references import Encoded
 
 
+# Written out on purpose: a typo in batch_request.INSTRUCTIONS must fail this test.
+INSTRUCTIONS = (
+    "Use the configured image_generation tool. Follow the user prompt. "
+    "Pass the user prompt to the tool as written. "
+    "The attached images are references, in the order supplied; if any."
+)
+
+
 def png(n):
     return Encoded("image/png", bytes(range(256)) * (n // 256) + bytes(n % 256), 64, 32)
 
@@ -16,7 +24,7 @@ def jpeg(n):
 
 
 class BatchRequestTests(unittest.TestCase):
-    def full_object(self, request, prompt, size, quality, images, instructions):
+    def full_object(self, request, prompt, size, quality, images, instructions, background="opaque"):
         content = [{"type": "input_text", "text": prompt}]
         for image in images:
             url = f"data:{image.mime};base64," + base64.b64encode(image.data).decode("ascii")
@@ -37,7 +45,7 @@ class BatchRequestTests(unittest.TestCase):
                     "size": size,
                     "quality": quality,
                     "output_format": "png",
-                    "background": "auto",
+                    "background": background,
                     "moderation": "low",
                     "partial_images": 0,
                 }],
@@ -48,13 +56,11 @@ class BatchRequestTests(unittest.TestCase):
             },
         }
 
-    def check_golden(self, prompt, images):
-        request = batch_request.build(prompt, 3840, 2160, "max", images)
-        instructions = (
-            batch_request.INSTRUCTIONS_WITH_REFERENCES if images else batch_request.INSTRUCTIONS_NO_REFERENCES
-        )
+    def check_golden(self, prompt, images, transparent=False):
+        request = batch_request.build(prompt, 3840, 2160, "max", images, transparent)
+        background = "transparent" if transparent else "opaque"
         expected = (
-            json.dumps(self.full_object(request, prompt, "3840x2160", "max", images, instructions),
+            json.dumps(self.full_object(request, prompt, "3840x2160", "max", images, INSTRUCTIONS, background),
                        ensure_ascii=True, separators=(",", ":")) + "\n"
         ).encode("ascii")
         actual = request.to_bytes()
@@ -76,6 +82,25 @@ class BatchRequestTests(unittest.TestCase):
         request = self.check_golden("Prompt only", [])
         line = json.loads(request.to_bytes())
         self.assertEqual(line["body"]["tools"][0]["action"], "generate")
+
+    def test_transparent_background(self):
+        request = self.check_golden("Prompt", [png(10)], transparent=True)
+        tool = json.loads(request.to_bytes())["body"]["tools"][0]
+        self.assertEqual((tool["background"], tool["output_format"]), ("transparent", "png"))
+
+    def test_same_instruction_with_and_without_images(self):
+        with_images = json.loads(batch_request.build("x", 1024, 1024, "max", [png(10)]).to_bytes())
+        without = json.loads(batch_request.build("x", 1024, 1024, "max", []).to_bytes())
+        self.assertEqual(with_images["body"]["instructions"], INSTRUCTIONS)
+        self.assertEqual(without["body"]["instructions"], INSTRUCTIONS)
+        self.assertNotIn("exactly one", INSTRUCTIONS)
+
+    def test_size_for_counts_the_background_value(self):
+        images = [png(1000)]
+        for transparent in (False, True):
+            request = batch_request.build("x", 1024, 1024, "max", images, transparent)
+            self.assertEqual(batch_request.size_for("x", 1024, 1024, "max", images, transparent),
+                             len(request.to_bytes()))
 
     def test_prompt_is_kept_unchanged(self):
         prompt = "  keep  my spacing  \n\n"

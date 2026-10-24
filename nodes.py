@@ -22,7 +22,7 @@ from comfy_api.latest import io
 from comfy_execution.graph_utils import ExecutionBlocker
 
 from . import (batch_http, batch_request, codex_exec, credentials, key_prompt, key_setup, presets,
-               references)
+               references, saved_workflow)
 
 log = logging.getLogger("comfyui-gpt-images")
 
@@ -106,6 +106,13 @@ class GPTImagesNode(io.ComfyNode):
                                     default="max",
                                     tooltip="Sunburst quality.",
                                 ),
+                                io.Boolean.Input(
+                                    "transparent_background",
+                                    default=False,
+                                    label_on="transparent",
+                                    label_off="opaque",
+                                    tooltip="On: transparent background (PNG). Off: opaque background.",
+                                ),
                             ],
                         ),
                     ],
@@ -134,6 +141,8 @@ class GPTImagesNode(io.ComfyNode):
                 io.String.Output(display_name="batch_id", tooltip="Sunburst Batch mode only."),
                 io.String.Output(display_name="batch_url", tooltip="Sunburst Batch mode only: dashboard link."),
             ],
+            # The workflow sent with the run, to read the switch's raw saved value (see execute).
+            hidden=[io.Hidden.unique_id, io.Hidden.extra_pnginfo],
             is_output_node=True,
             is_input_list=True,
             not_idempotent=True,
@@ -159,12 +168,26 @@ class GPTImagesNode(io.ComfyNode):
 
         if selected == MODE_BATCH:
             aspect = settings.get("aspect_ratio") or {}
+            transparent = _single(settings.get("transparent_background", False), "transparent background")
+            if not isinstance(transparent, bool):
+                raise ValueError("transparent_background must be on or off.")
+            # ComfyUI turns any text in an on/off input into True. A Batch workflow saved with
+            # version 3 and restored by position puts its prompt text into this switch.
+            leftover = saved_workflow.leftover_text(saved_workflow.saved_value(
+                cls.hidden.extra_pnginfo, cls.hidden.unique_id, "mode.transparent_background"))
+            if leftover is not None:
+                raise ValueError(
+                    f"The transparent_background switch holds leftover text from an older workflow "
+                    f"(\"{leftover}\"), which ComfyUI would read as on. Set the switch to opaque or "
+                    "transparent, check the prompt, and run again. Nothing was sent."
+                )
             batch_id = await cls._batch(
                 text,
                 refs,
                 _single(aspect.get("aspect_ratio"), "aspect ratio"),
                 _single(aspect.get("resolution"), "resolution"),
                 _single(settings.get("quality"), "quality"),
+                transparent,
             )
             return io.NodeOutput(ExecutionBlocker(None), batch_id, batch_http.dashboard_url(batch_id))
 
@@ -257,7 +280,8 @@ class GPTImagesNode(io.ComfyNode):
             return await cls._ask_for_key(rejected=True), credentials.STORE_SOURCE
 
     @classmethod
-    async def _batch(cls, prompt: str, refs: list, aspect: str, resolution: str, quality: str) -> str:
+    async def _batch(cls, prompt: str, refs: list, aspect: str, resolution: str, quality: str,
+                     transparent: bool = False) -> str:
         width, height = presets.resolve(aspect, resolution)
         if quality not in batch_request.QUALITIES:
             raise ValueError(f"Unknown quality '{quality}'.")
@@ -265,15 +289,18 @@ class GPTImagesNode(io.ComfyNode):
 
         def fits(items) -> bool:
             model_management.throw_exception_if_processing_interrupted()  # Stop works while encoding
-            return batch_request.size_for(prompt, width, height, quality, items) <= batch_request.MAX_JSONL_BYTES
+            size = batch_request.size_for(prompt, width, height, quality, items, transparent)
+            return size <= batch_request.MAX_JSONL_BYTES
 
         encoded, kind = references.encode_with_fallback(refs, fits) if refs else ([], "png")
         if kind == "jpeg":
             log.warning("[GPT Images] Request was over 200 MB with PNG references; sent them as JPEG quality 95.")
-        request = batch_request.build(prompt, width, height, quality, encoded)
+        request = batch_request.build(prompt, width, height, quality, encoded, transparent)
         log.info(
-            "[GPT Images] Sunburst Batch: uploading %.1f MB (%d reference(s), %dx%d, quality %s, key from %s).",
-            request.size / 1e6, len(encoded), width, height, quality, source,
+            "[GPT Images] Sunburst Batch: uploading %.1f MB (%d reference(s), %dx%d, quality %s, %s background, "
+            "key from %s).",
+            request.size / 1e6, len(encoded), width, height, quality,
+            "transparent" if transparent else "opaque", source,
         )
         try:
             batch_id = await asyncio.to_thread(batch_http.submit, request, api_key)

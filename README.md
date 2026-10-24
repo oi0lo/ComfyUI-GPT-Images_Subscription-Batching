@@ -1,4 +1,4 @@
-# ComfyUI GPT Images (version 3)
+# ComfyUI GPT Images (version 4)
 
 One ComfyUI node, **GPT Images: Subscription / Batching gpt-image-2.5 sunburst**, with two modes:
 
@@ -11,15 +11,20 @@ Only the selected mode runs. Neither mode uses ComfyUI credits or OpenRouter.
 
 Pure Python: the standard library plus what ComfyUI already ships (PyTorch, NumPy, Pillow). No pip installs, no JavaScript, no frontend extension.
 
-## What's new in version 3
+## What's new in version 4
 
-- **No API key notice in the node.** In ComfyUI's newer node design the notice box showed only its name and looked like a place to type the key. The key window itself says where the key is kept.
+- **New instruction to Luna in Batch mode**, the same with and without reference images: "Use the configured image_generation tool. Follow the user prompt. Pass the user prompt to the tool as written. The attached images are references, in the order supplied; if any." The version 3 instruction began "Generate exactly one final image", which Luna turned into "Create a single ... portrait ... Avoid collage or multiple views" for a multi-view reference sheet. Whether Luna follows "as written" shows in the `revised_prompt` field of the batch output file.
+- **transparent_background switch** in Batch mode. Off (default) asks for an opaque background, on for a transparent one. Version 3 always sent `auto`.
+- **Error messages quote OpenAI's own answer**, then say whether a batch exists. A failed upload means no batch was created. A server error while creating the batch means one may exist, so check your batches page before queueing again.
+- Version 3 removed the API key notice from the node; version 2 added the Windows key window, the seven-ratio size list, GPT-6 Luna at low reasoning for Subscription mode, and Codex's exact reason when an image is blocked.
 
-**Upgrading from version 2:** replace the whole folder and restart ComfyUI. Workflows saved with version 2 in Sunburst Batch mode open with an **empty prompt**: ComfyUI restores a node's values by position, and the removed box sat just before the prompt. Their other settings carry over. Copy those prompts before upgrading, or paste them again afterwards. A run with an empty prompt stops before anything is sent. Subscription-mode workflows are not affected.
+### Upgrading
 
-**Upgrading from version 1:** workflows saved with version 1 keep their old resolution value, which no longer exists; pick the resolution again (ComfyUI marks it as "Value not in list").
+Replace the whole folder and restart ComfyUI.
 
-Version 2 added the Windows key window (paste the key once; it is checked with OpenAI and stored in Windows Credential Manager), the seven-ratio size list with 1:1 Square as the default, GPT-6 Luna at low reasoning for Subscription mode, and Codex's exact reason when an image is blocked.
+**Before opening Batch workflows saved with version 3,** turn on ComfyUI's experimental setting **Restore widget values by name** (Settings, Comfy, Workflow; or search the Settings for it). With it on, those workflows open with their prompt and settings, and the new switch off. Without it, ComfyUI restores values by position: the prompt text lands in the new switch (shown as "transparent") and the prompt box is empty. The node refuses to run either way until you fix it: an empty prompt stops the run, and so does leftover text in the switch, because ComfyUI would otherwise read any text there as "on". Set the switch and paste the prompt, then run. Subscription-mode workflows are not affected.
+
+Workflows saved with version 2 in Batch mode open with an empty prompt unless that setting is on. Workflows saved with version 1 need their resolution picked again.
 
 ## Requirements
 
@@ -28,15 +33,6 @@ Version 2 added the Windows key window (paste the key once; it is checked with O
 - Sunburst Batch mode: an **OpenAI API key** from your Platform account. A restricted key needs access to Batches and Files.
 
 ## Install
-
-Clone the repository into ComfyUI's `custom_nodes` directory:
-
-```bash
-cd /path/to/ComfyUI/custom_nodes
-git clone https://github.com/oi0lo/ComfyUI-GPT-Images_Subscription-Batching.git comfyui-gpt-images
-```
-
-Alternatively, install from a downloaded ZIP:
 
 1. Unzip so that this folder sits at `custom_nodes\comfyui-gpt-images` inside your ComfyUI folder.
    For ComfyUI Desktop that is inside the base folder chosen at install, for example
@@ -84,7 +80,8 @@ Run `codex login` once in a terminal and sign in with ChatGPT; `codex login stat
   - **aspect_ratio**: `1:1 Square` (default), `16:9 Landscape`, `9:16 Portrait`, `4:5 Portrait`, `5:4 Landscape`, `3:2 Landscape`, `2:3 Portrait`.
   - **resolution**: the sizes for that ratio, each with its megapixels and a classification label; the default is the largest. Labels such as "Recommended" and "Documented example" are this project's classification. OpenAI's docs list "common sizes" and call outputs above 3,686,400 pixels (2560 x 1440) experimental; every "Experimental" label here follows that rule.
   - **quality**: auto, low, medium, high, xhigh, max. Default max.
-- **prompt**: sent exactly as written. In Batch mode it goes to Luna, and OpenAI's docs say Luna rewrites it before Sunburst sees it; the `revised_prompt` field in the batch output file shows what Sunburst actually got.
+  - **transparent_background**: off (default) for an opaque background, on for a transparent one. The output is always PNG. OpenAI's API reference lists both backgrounds for `gpt-image-2.5-sunburst`.
+- **prompt**: sent exactly as written. In Batch mode it goes to Luna, and OpenAI's docs say the mainline model revises it before Sunburst sees it. The node's instruction asks Luna to pass it on as written; the `revised_prompt` field in the batch output file shows what Sunburst actually got.
 - **image_1, image_2, ...**: optional references, used in socket order. Every image inside a connected batch counts as one reference.
 - Outputs: **image** (Subscription mode), **batch_id** and **batch_url** (Batch mode). The outputs a mode does not produce are skipped, so anything connected to them simply does not run.
 
@@ -96,7 +93,7 @@ Each queued run makes a new generation (Subscription) or a new paid batch job (B
 
 **Subscription.** The node finds Codex (the newest copy installed by the ChatGPT app, otherwise `codex` on PATH), checks the sign-in, writes the references as lossless PNGs into its own temporary folder, and runs one Codex task with GPT-6 Luna at low reasoning. It takes the image from Codex's folder for that task (`.codex\generated_images\<task id>` in your user folder), checks that the file is new and not one of the inputs, and loads it. The temporary folder is then deleted; the generated image stays where Codex saved it. If the image is blocked, the error names it as a safety block and quotes Codex's exact reason; the same prompt can pass on another try. The node gives up after 15 minutes, and Stop in ComfyUI ends the Codex process. Nothing is ever retried automatically.
 
-**Sunburst Batch.** The node gets the API key (asking for it if needed), encodes the references, builds one JSONL line, checks its exact size, uploads it and creates the batch. It does not poll or download results: get the output file from the batch page (`batch_url`). If the network fails after the batch request was sent, the error says the outcome is unknown; check your batches page before queueing again.
+**Sunburst Batch.** The node gets the API key (asking for it if needed), encodes the references, builds one JSONL line, checks its exact size, uploads it and creates the batch. It does not poll or download results: get the output file from the batch page (`batch_url`). Errors quote OpenAI's own answer. If the upload fails, no batch was created and queueing again cannot make a duplicate. If OpenAI answers with a server error, or the connection drops, after the batch request was sent, a batch may exist: check your batches page before queueing again. Nothing is retried automatically.
 
 ## Limits and size checks
 
@@ -119,6 +116,6 @@ The Codex tests use a POSIX shell script as the stand-in and are skipped on Wind
 
 ## What has and has not been tested
 
-Tested on Linux: the offline tests, and the node loaded and run inside ComfyUI v0.42.4 with its real frontend in both node designs, against stand-ins for Codex, OpenAI, the key window and Credential Manager (both modes, references, the JPEG fallback, Stop, sign-in and safety errors, stale settings, old workflows, and every key case: no key, wrong key, rejected stored key, rejected variable, Cancel).
+Tested on Linux: the offline tests, and the node loaded and run inside ComfyUI v0.42.4 with its real frontend in both node designs, against stand-ins for Codex, OpenAI, the key window and Credential Manager (both modes, references, the JPEG fallback, Stop, sign-in and safety errors, stale settings, OpenAI errors on upload and on batch creation, the transparent switch, old workflows with and without Restore widget values by name, and every key case: no key, wrong key, rejected stored key, rejected variable, Cancel).
 
-Run for real on Windows: Subscription generations through the node, with and without references (version 1); the key window, saving the key to Credential Manager, and a real Batch submission with two references (version 2). Not yet run for real: Subscription mode with GPT-6 Luna.
+Run for real on Windows: Subscription generations with and without references, also with GPT-6 Luna; the key window and saving the key to Credential Manager; Batch submissions with references, with their results. Not yet run for real: the version 4 instruction and the transparent switch.

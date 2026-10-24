@@ -30,9 +30,10 @@ class Recorder(http.server.BaseHTTPRequestHandler):
 
     def _reply(self):
         status, payload = Recorder.replies.pop(0)
-        data = json.dumps(payload).encode()
+        raw = isinstance(payload, bytes)  # plain-text body, as a proxy in front of OpenAI sends
+        data = payload if raw else json.dumps(payload).encode()
         self.send_response(status)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", "text/plain" if raw else "application/json")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
@@ -98,9 +99,62 @@ class SubmitTests(unittest.TestCase):
     def test_create_error_is_not_retried(self):
         Recorder.replies = [(200, {"id": "file-abc"}), (500, {"error": {"message": "boom"}})]
         with LocalServer() as server:
-            with self.assertRaises(batch_http.BatchError):
+            with self.assertRaises(batch_http.BatchError) as caught:
                 batch_http.submit(sample_request(), KEY, connect=server.connect)
         self.assertEqual(len(Recorder.calls), 2)
+        self.assertTrue(caught.exception.ambiguous)
+
+    def test_upload_503_quotes_openai_and_says_no_batch(self):
+        # The exact answer from the user's failed run on 2026-10-24.
+        envoy = b"upstream connect error or disconnect/reset before headers. reset reason: connection termination"
+        Recorder.replies = [(503, envoy)]
+        with LocalServer() as server:
+            with self.assertRaises(batch_http.BatchError) as caught:
+                batch_http.submit(sample_request(), KEY, connect=server.connect)
+        self.assertEqual(
+            str(caught.exception),
+            "OpenAI returned an error while the file was uploading (HTTP 503): upstream connect error or "
+            "disconnect/reset before headers. reset reason: connection termination. No batch was created, "
+            "so queueing this run again cannot make a duplicate.",
+        )
+        self.assertFalse(caught.exception.ambiguous)
+        self.assertEqual(len(Recorder.calls), 1)  # no retry, no batch creation
+
+    def test_upload_json_error_quotes_openai_message(self):
+        Recorder.replies = [(429, {"error": {"message": "You exceeded your current quota.", "code": "insufficient_quota"}})]
+        with LocalServer() as server:
+            with self.assertRaises(batch_http.BatchError) as caught:
+                batch_http.submit(sample_request(), KEY, connect=server.connect)
+        self.assertEqual(
+            str(caught.exception),
+            "OpenAI returned an error while the file was uploading (HTTP 429): You exceeded your current quota. "
+            "No batch was created, so queueing this run again cannot make a duplicate.",
+        )
+
+    def test_create_server_error_may_have_created_a_batch(self):
+        Recorder.replies = [(200, {"id": "file-abc"}), (503, b"upstream connect error or disconnect/reset before headers.")]
+        with LocalServer() as server:
+            with self.assertRaises(batch_http.BatchError) as caught:
+                batch_http.submit(sample_request(), KEY, connect=server.connect)
+        self.assertEqual(
+            str(caught.exception),
+            "OpenAI returned a server error while creating the batch (HTTP 503): upstream connect error or "
+            "disconnect/reset before headers. A batch may or may not have been created. Check "
+            "https://platform.openai.com/batches before queueing again.",
+        )
+        self.assertTrue(caught.exception.ambiguous)
+
+    def test_create_refused_means_no_batch(self):
+        Recorder.replies = [(200, {"id": "file-abc"}), (400, {"error": {"message": "Invalid input file"}})]
+        with LocalServer() as server:
+            with self.assertRaises(batch_http.BatchError) as caught:
+                batch_http.submit(sample_request(), KEY, connect=server.connect)
+        self.assertFalse(caught.exception.ambiguous)
+        self.assertEqual(
+            str(caught.exception),
+            "OpenAI returned an error while creating the batch (HTTP 400): Invalid input file. "
+            "No batch was created, so queueing this run again cannot make a duplicate.",
+        )
 
     def test_upload_401_is_key_rejected(self):
         Recorder.replies = [(401, {"error": {"message": "Incorrect API key provided"}})]
@@ -190,7 +244,11 @@ class AmbiguityTests(unittest.TestCase):
         with self.assertRaises(batch_http.BatchError) as caught:
             batch_http.upload_jsonl(sample_request(), KEY, connect=lambda: FakeConnection("response"))
         self.assertFalse(caught.exception.ambiguous)
-        self.assertIn("No batch was created", str(caught.exception))
+        self.assertEqual(
+            str(caught.exception),
+            "The connection to OpenAI failed while the file was uploading: timed out. "
+            "No batch was created, so queueing this run again cannot make a duplicate.",
+        )
 
     def test_create_timeout_is_ambiguous(self):
         with self.assertRaises(batch_http.BatchError) as caught:

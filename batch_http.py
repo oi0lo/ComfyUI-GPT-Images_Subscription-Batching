@@ -17,18 +17,27 @@ from urllib.parse import urlsplit
 API_HOST = "api.openai.com"
 API_PORT = 443
 DASHBOARD_URL = "https://platform.openai.com/batches/{batch_id}"
+BATCHES_PAGE = "https://platform.openai.com/batches"
 SOCKET_TIMEOUT = 120  # seconds per network operation
 USER_AGENT = "comfyui-gpt-images/1.0"
 MAX_RESPONSE_BYTES = 1_000_000
 
+NO_BATCH = "No batch was created, so queueing this run again cannot make a duplicate."
+MAYBE_BATCH = f"A batch may or may not have been created. Check {BATCHES_PAGE} before queueing again."
+
 
 class BatchError(RuntimeError):
-    """Submission failed. `ambiguous` means a batch may exist despite the error."""
+    """Submission failed. `ambiguous` means a batch may exist despite the error.
 
-    def __init__(self, message: str, ambiguous: bool = False, status: int | None = None):
+    When OpenAI answered with an HTTP error, `status` is its status code and `detail`
+    is OpenAI's own error text, as returned (key redacted).
+    """
+
+    def __init__(self, message: str, ambiguous: bool = False, status: int | None = None, detail: str = ""):
         super().__init__(message)
         self.ambiguous = ambiguous
         self.status = status
+        self.detail = detail
 
 
 class KeyRejected(BatchError):
@@ -73,33 +82,48 @@ def redact(text: str, api_key: str) -> str:
     return re.sub(r"sk-[A-Za-z0-9_\-*]{6,}", "sk-[redacted]", text)
 
 
-def _api_error_text(status: int, body: bytes) -> str:
-    detail = ""
+def _sentence(text: str) -> str:
+    text = text.strip()
+    return text if text.endswith((".", "!", "?")) else text + "."
+
+
+def _exception_text(exc: BaseException) -> str:
+    return str(exc).strip() or type(exc).__name__
+
+
+def _openai_error_detail(body: bytes) -> str:
+    """OpenAI's own error text: error.message of a JSON error body, otherwise the body itself."""
+    text = body.decode("utf-8", "replace")
     try:
-        payload = json.loads(body.decode("utf-8", "replace"))
-        error = payload.get("error") if isinstance(payload, dict) else None
-        if isinstance(error, dict):
-            detail = error.get("message") or error.get("code") or ""
-        elif isinstance(error, str):
-            detail = error
+        payload = json.loads(text)
     except ValueError:
-        detail = body[:300].decode("utf-8", "replace")
-    hints = {
-        401: "OpenAI rejected the API key. Check the key (the setup helper's status action shows which key is used).",
-        403: "This API key or project is not allowed to do this.",
-        429: "Rate limit or quota reached on your OpenAI account.",
-    }
-    hint = hints.get(status, "OpenAI returned an error." if status < 500 else "OpenAI had a server error.")
-    return f"{hint} HTTP {status}" + (f": {detail}" if detail else "")
+        payload = None
+    error = payload.get("error") if isinstance(payload, dict) else None
+    if isinstance(error, dict):
+        message = error.get("message") or error.get("code")
+        if isinstance(message, str) and message.strip():
+            return " ".join(message.split())
+    elif isinstance(error, str) and error.strip():
+        return " ".join(error.split())
+    return " ".join(text.split())[:300]
+
+
+def _describe(exc: BatchError, during: str, server_word: bool = False) -> str:
+    """'OpenAI returned an error while <during> (HTTP 503): <OpenAI's text>.'"""
+    if exc.status is None:
+        return _sentence(str(exc))
+    kind = "a server error" if server_word and exc.status >= 500 else "an error"
+    return _sentence(f"OpenAI returned {kind} while {during} (HTTP {exc.status})" + (f": {exc.detail}" if exc.detail else ""))
 
 
 def _read_json(response: http.client.HTTPResponse, api_key: str) -> dict:
     body = response.read(MAX_RESPONSE_BYTES + 1)
     status = response.status
     if 300 <= status < 400:
-        raise BatchError(f"Unexpected redirect from OpenAI (HTTP {status}); not followed.")
+        raise BatchError(f"OpenAI answered with a redirect (HTTP {status}), which the node does not follow.")
     if status != 200:
-        raise BatchError(redact(_api_error_text(status, body), api_key), status=status)
+        detail = redact(_openai_error_detail(body), api_key)
+        raise BatchError(f"HTTP {status}" + (f": {detail}" if detail else ""), status=status, detail=detail)
     if len(body) > MAX_RESPONSE_BYTES:
         raise BatchError("OpenAI response was unexpectedly large.")
     try:
@@ -152,19 +176,20 @@ def upload_jsonl(request, api_key: str, connect=default_connection) -> str:
             response = connection.getresponse()
             payload = _read_json(response, api_key)
         except (OSError, http.client.HTTPException) as exc:
-            where = "while uploading" if sent_anything else "before anything was sent"
+            where = "while the file was uploading" if sent_anything else "before anything was sent"
             raise BatchError(
-                f"Network error {where}: {exc}. No batch was created; it is safe to queue again."
+                f"The connection to OpenAI failed {where}: {_sentence(_exception_text(exc))} {NO_BATCH}"
             ) from None
         except BatchError as exc:
+            message = f"{_describe(exc, 'the file was uploading')} {NO_BATCH}"
             if exc.status == 401:  # refused before anything was stored: safe to try another key
-                raise KeyRejected(str(exc), status=401) from None
-            raise
+                raise KeyRejected(message, status=401, detail=exc.detail) from None
+            raise BatchError(message, status=exc.status, detail=exc.detail) from None
     finally:
         connection.close()
     file_id = payload.get("id")
     if not isinstance(file_id, str) or not file_id:
-        raise BatchError("OpenAI accepted the upload but returned no file id.")
+        raise BatchError(f"OpenAI accepted the upload but returned no file id. {NO_BATCH}")
     return file_id
 
 
@@ -188,24 +213,31 @@ def create_batch(file_id: str, api_key: str, connect=default_connection) -> str:
             response = connection.getresponse()
             payload = _read_json(response, api_key)
         except (OSError, http.client.HTTPException) as exc:
+            text = _sentence(_exception_text(exc))
             if not sent:
                 raise BatchError(
-                    f"Network error before the batch request was sent: {exc}. "
-                    f"The file {file_id} was uploaded but no batch was created; it is safe to queue again."
+                    f"The connection to OpenAI failed before the batch request was sent: {text} "
+                    f"The file {file_id} was uploaded, but no batch was created, so queueing this run "
+                    "again cannot make a duplicate."
                 ) from None
             raise BatchError(
-                f"Network error after the batch request was sent: {exc}. A batch may or may not have "
-                "been created. Check https://platform.openai.com/batches before queueing again.",
+                f"The connection to OpenAI failed after the batch request was sent: {text} {MAYBE_BATCH}",
                 ambiguous=True,
             ) from None
+        except BatchError as exc:
+            described = _describe(exc, "creating the batch", server_word=True)
+            if exc.status is not None and exc.status < 500:
+                # OpenAI refused the request (4xx), so no batch exists.
+                raise BatchError(f"{described} {NO_BATCH}", status=exc.status, detail=exc.detail) from None
+            # A server error, a redirect or an unreadable answer after the request was sent:
+            # OpenAI may have created the batch before the answer was lost.
+            raise BatchError(f"{described} {MAYBE_BATCH}", ambiguous=True, status=exc.status,
+                             detail=exc.detail) from None
     finally:
         connection.close()
     batch_id = payload.get("id")
     if not isinstance(batch_id, str) or not batch_id:
-        raise BatchError(
-            "OpenAI answered without a batch id. Check https://platform.openai.com/batches before queueing again.",
-            ambiguous=True,
-        )
+        raise BatchError(f"OpenAI answered without a batch id. {MAYBE_BATCH}", ambiguous=True)
     return batch_id
 
 
@@ -225,17 +257,22 @@ def check_key(api_key: str, connect=default_connection) -> None:
             response = connection.getresponse()
             _read_json(response, api_key)
         except (OSError, http.client.HTTPException) as exc:
-            raise BatchError(f"Could not reach OpenAI to check the key ({exc}). The key was not saved.") from None
+            raise BatchError(
+                f"The connection to OpenAI failed while checking the key: {_sentence(_exception_text(exc))} "
+                "The key was not saved."
+            ) from None
         except BatchError as exc:
             if exc.status == 401:
-                raise KeyRejected("OpenAI rejected this key.", status=401) from None
+                raise KeyRejected("OpenAI rejected this key.", status=401, detail=exc.detail) from None
             if exc.status == 403:
                 raise KeyNotAllowed(
                     "OpenAI accepted this key but it may not use the Batch API. In your OpenAI key "
                     "settings, allow Batches and Files for it, or use another key.",
                     status=403,
+                    detail=exc.detail,
                 ) from None
-            raise BatchError(f"OpenAI could not check the key: {exc} The key was not saved.", status=exc.status) from None
+            raise BatchError(f"{_describe(exc, 'checking the key')} The key was not saved.",
+                             status=exc.status, detail=exc.detail) from None
     finally:
         connection.close()
 

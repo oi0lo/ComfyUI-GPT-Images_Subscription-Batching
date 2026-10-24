@@ -31,13 +31,13 @@ QUALITIES = ("auto", "low", "medium", "high", "xhigh", "max")
 # (512 MB) is higher, so with one request per file this is the binding limit.
 MAX_JSONL_BYTES = 200_000_000
 
-INSTRUCTIONS_WITH_REFERENCES = (
-    "Generate exactly one final image using the configured image_generation tool. "
-    "Follow the user prompt. The attached images are references, in the order supplied."
-)
-INSTRUCTIONS_NO_REFERENCES = (
-    "Generate exactly one final image using the configured image_generation tool. "
-    "Follow the user prompt."
+# The user's wording (v4), sent with and without reference images. The v3 text began
+# "Generate exactly one final image", which Luna turned into "Create a single ...
+# portrait ... Avoid collage or multiple views" for a multi-view reference sheet.
+INSTRUCTIONS = (
+    "Use the configured image_generation tool. Follow the user prompt. "
+    "Pass the user prompt to the tool as written. "
+    "The attached images are references, in the order supplied; if any."
 )
 
 
@@ -71,7 +71,8 @@ def data_url_length(image: Encoded) -> int:
     return len(data_url_prefix(image)) + 4 * ((len(image.data) + 2) // 3)
 
 
-def build(prompt: str, width: int, height: int, quality: str, images: list[Encoded]) -> BatchRequest:
+def build(prompt: str, width: int, height: int, quality: str, images: list[Encoded],
+          transparent: bool = False) -> BatchRequest:
     if quality not in QUALITIES:
         raise ValueError(f"Unknown quality '{quality}'.")
     custom_id = f"gpt-images-{uuid.uuid4().hex}"
@@ -86,8 +87,8 @@ def build(prompt: str, width: int, height: int, quality: str, images: list[Encod
         "action": "edit" if images else "generate",
         "size": f"{width}x{height}",
         "quality": quality,
-        "output_format": "png",
-        "background": "auto",
+        "output_format": "png",  # transparent backgrounds need png or webp
+        "background": "transparent" if transparent else "opaque",
         "moderation": "low",
         "partial_images": 0,
     }
@@ -98,7 +99,7 @@ def build(prompt: str, width: int, height: int, quality: str, images: list[Encod
         "body": {
             "model": MODEL,
             "reasoning": {"effort": "none"},
-            "instructions": INSTRUCTIONS_WITH_REFERENCES if images else INSTRUCTIONS_NO_REFERENCES,
+            "instructions": INSTRUCTIONS,
             "input": [{"role": "user", "content": content}],
             "tools": [tool],
             "tool_choice": {"type": "image_generation"},
@@ -120,5 +121,6 @@ def build(prompt: str, width: int, height: int, quality: str, images: list[Encod
     return BatchRequest(custom_id, segments, list(images))
 
 
-def size_for(prompt: str, width: int, height: int, quality: str, images: list[Encoded]) -> int:
-    return build(prompt, width, height, quality, images).size
+def size_for(prompt: str, width: int, height: int, quality: str, images: list[Encoded],
+             transparent: bool = False) -> int:
+    return build(prompt, width, height, quality, images, transparent).size
