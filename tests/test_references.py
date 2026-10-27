@@ -37,12 +37,53 @@ class CollectTests(unittest.TestCase):
         self.assertEqual(references.collect(None), [])
         self.assertEqual(references.collect({}), [])
 
-    def test_rejects_rgba_and_bad_shapes(self):
-        with self.assertRaises(references.ReferenceError):
-            references.collect({"image_1": batch(1, channels=4)})
+    def test_accepts_rgb_and_rgba_rejects_other_shapes(self):
+        refs = references.collect({"image_1": batch(1, channels=4), "image_2": batch(1)})
+        self.assertEqual([references.has_alpha(item) for _, item in refs], [True, False])
+        for channels in (1, 2, 5):
+            with self.assertRaises(references.ReferenceError):
+                references.collect({"image_1": batch(1, channels=channels)})
         bad = np.zeros((24, 32, 3), dtype=np.float32)
         with self.assertRaises(references.ReferenceError):
             references.collect({"image_1": bad})
+
+    def test_rgba_png_keeps_every_value_including_hidden_colour(self):
+        rng = np.random.default_rng(7)
+        pixels = rng.integers(0, 256, size=(1, 20, 30, 4), dtype=np.uint8)
+        pixels[0, :10, :, 3] = 0  # fully transparent rows that still store colour
+        (socket, item), = references.collect({"image_1": pixels.astype(np.float32) / 255.0})
+        encoded = references.encode(item, "png", socket)
+        self.assertTrue(encoded.alpha)
+        self.assertEqual((encoded.mime, encoded.extension), ("image/png", ".png"))
+        with Image.open(io.BytesIO(encoded.data)) as image:
+            self.assertEqual(image.mode, "RGBA")
+            self.assertTrue(np.array_equal(np.asarray(image), pixels[0]))
+
+    def test_rgba_is_never_turned_into_jpeg(self):
+        (socket, item), = references.collect({"image_3": batch(1, channels=4)})
+        with self.assertRaises(references.ReferenceError):
+            references.encode(item, "jpeg", socket)
+
+    def test_fallback_with_transparency_stops_and_names_the_reference(self):
+        refs = references.collect({"image_1": batch(1), "image_2": batch(1, channels=4)})
+        attempts = []
+
+        def fits(items):
+            attempts.append([i.mime for i in items])
+            return False  # PNG never fits, so the JPEG fallback would be needed
+
+        with self.assertRaises(references.ReferenceError) as caught:
+            references.encode_with_fallback(refs, fits)
+        message = str(caught.exception)
+        self.assertIn("image_2", message)
+        self.assertNotIn("image_1", message)
+        self.assertIn("flatten", message)
+        self.assertTrue(all("image/jpeg" not in mimes for mimes in attempts))  # no JPEG was made
+
+    def test_rgba_that_fits_stays_png(self):
+        refs = references.collect({"image_1": batch(1, channels=4)})
+        encoded, kind = references.encode_with_fallback(refs, lambda items: True)
+        self.assertEqual((kind, encoded[0].alpha), ("png", True))
 
     def test_rejects_non_finite(self):
         data = batch(1)

@@ -39,6 +39,18 @@ def write_png(path):
         handle.write(data)
 
 
+
+def keep_references(paths, label):
+    """Test runs set FAKE_REF_COPY_DIR to see exactly which files the service received."""
+    folder = os.environ.get("FAKE_REF_COPY_DIR")
+    if not folder:
+        return
+    import shutil
+    os.makedirs(folder, exist_ok=True)
+    for number, path in enumerate(paths, start=1):
+        shutil.copyfile(path, os.path.join(folder, f"{label}_{number}_{os.path.basename(path)}"))
+
+
 if args[:2] == ["login", "status"]:
     if mode == "login_none":
         sys.stderr.write("Not logged in\n")
@@ -58,6 +70,7 @@ if log_path:
         json.dump({"args": args, "stdin": stdin_text, "has_api_key": "OPENAI_API_KEY" in os.environ,
                    "has_codex_key": "CODEX_API_KEY" in os.environ, "cwd": os.getcwd()}, handle)
 
+keep_references([args[i + 1] for i, a in enumerate(args) if a == "--image"], "codex")
 result_path = args[args.index("--output-last-message") + 1]
 thread_id = str(uuid.uuid4())
 home = os.environ.get("CODEX_HOME") or os.path.join(os.path.expanduser("~"), ".codex")

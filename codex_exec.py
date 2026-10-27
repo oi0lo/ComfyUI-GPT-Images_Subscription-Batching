@@ -15,19 +15,21 @@ and the agent's answer is only a cross-check.
 
 from __future__ import annotations
 
-import asyncio
 import glob
 import json
 import os
 import re
 import shutil
-import signal
 import subprocess
 import sys
-import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
+
+try:
+    from . import agent_process
+except ImportError:  # loaded on its own (tests)
+    import agent_process
 
 TIMEOUT_SECONDS = 15 * 60
 AGENT_MODEL = "gpt-6-luna"  # Codex docs: "most efficient model for focused, high-volume tasks"
@@ -36,7 +38,7 @@ MAX_REFERENCES = 5  # Codex's built-in image tool limit in the tested build; ver
 MAX_REFERENCE_BYTES = 50_000_000  # Codex's bundled image-tool notes: input images "must be under 50MB"
 STRIPPED_ENV = ("OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL")
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp")
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+_NO_WINDOW = agent_process.NO_WINDOW
 
 RESULT_SCHEMA = {
     "type": "object",
@@ -227,25 +229,6 @@ class CodexResult:
     usage: dict | None
 
 
-def _kill(process: subprocess.Popen) -> None:
-    if process.poll() is not None:
-        return
-    try:
-        if sys.platform == "win32":
-            subprocess.run(
-                ["taskkill", "/T", "/F", "/PID", str(process.pid)],
-                capture_output=True, timeout=15, creationflags=_NO_WINDOW,
-            )
-        else:
-            os.killpg(process.pid, signal.SIGTERM)
-        process.wait(timeout=10)
-    except Exception:
-        pass
-    if process.poll() is None:
-        process.kill()
-        process.wait(timeout=10)
-
-
 def _read_report(path: str) -> dict | None:
     try:
         with open(path, "rb") as handle:
@@ -349,62 +332,33 @@ async def generate(
 
     started = time.time()
     clock = time.monotonic()
+    events = EventLog()
     try:
-        process = subprocess.Popen(
+        exit_code = await agent_process.run(
             command,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
             cwd=run_dir,
             env=child_env(),
-            creationflags=_NO_WINDOW,
-            start_new_session=(sys.platform != "win32"),
+            stdin_data=instruction,
+            on_stdout=events.feed_stdout,
+            on_stderr=events.feed_stderr,
+            timeout=timeout,
+            is_interrupted=is_interrupted,
+            poll_interval=poll_interval,
         )
     except OSError as exc:
         raise CodexError(f"Could not start Codex: {exc}") from None
-
-    events = EventLog()
-
-    def write_stdin():
-        try:
-            process.stdin.write(instruction)
-            process.stdin.close()
-        except OSError:
-            pass
-
-    threads = [
-        threading.Thread(target=write_stdin, daemon=True),
-        threading.Thread(target=events.feed_stdout, args=(process.stdout,), daemon=True),
-        threading.Thread(target=events.feed_stderr, args=(process.stderr,), daemon=True),
-    ]
-    for thread in threads:
-        thread.start()
-
-    try:
-        while process.poll() is None:
-            if is_interrupted():
-                _kill(process)
-                raise CodexInterrupted()
-            if time.monotonic() - clock > timeout:
-                _kill(process)
-                last = events.problems()
-                raise CodexError(
-                    f"Codex did not finish within {int(timeout // 60)} minutes and was stopped. Nothing was "
-                    "retried. The image may still appear later in your .codex/generated_images folder."
-                    + (f" Last Codex message: {last[:400]}" if last else "")
-                )
-            await asyncio.sleep(poll_interval)
-    finally:
-        for thread in threads:
-            thread.join(timeout=5)
-        for pipe in (process.stdin, process.stdout, process.stderr):
-            try:
-                pipe.close()
-            except OSError:
-                pass
+    except agent_process.ProcessInterrupted:
+        raise CodexInterrupted() from None
+    except agent_process.ProcessTimedOut:
+        last = events.problems()
+        raise CodexError(
+            f"Codex did not finish within {int(timeout // 60)} minutes and was stopped. Nothing was "
+            "retried. The image may still appear later in your .codex/generated_images folder."
+            + (f" Last Codex message: {last[:400]}" if last else "")
+        ) from None
 
     report = _read_report(result_path)
     image = pick_image(report, events, started, reference_paths, codex_home())
     if image is None:
-        raise CodexError(explain_failure(report, events, process.returncode))
+        raise CodexError(explain_failure(report, events, exit_code))
     return CodexResult(image, events.thread_id, time.monotonic() - clock, events.usage)

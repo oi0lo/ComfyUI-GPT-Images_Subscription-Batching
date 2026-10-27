@@ -4,6 +4,12 @@ Agreed encoding rule: lossless PNG first. Only if a size check fails, every
 reference is encoded again as high-quality JPEG and checked once more. Files on
 disk are never read or written here; everything works on the pixels ComfyUI
 passes to the node.
+
+References with transparency (RGBA, 4 channels) are sent as PNG exactly as they
+reach the node, including the colour stored under fully transparent pixels. JPEG
+cannot hold transparency, so when the JPEG fallback would be needed and any
+reference has transparency, the run stops and the user decides: reduce the image
+or flatten it before the node (v5 rule; nothing is flattened automatically).
 """
 
 from __future__ import annotations
@@ -31,6 +37,7 @@ class Encoded:
     data: bytes
     width: int
     height: int
+    alpha: bool = False  # PNG with a transparency channel
 
     @property
     def extension(self) -> str:
@@ -56,10 +63,9 @@ def _split(value, socket: str) -> list:
         raise ReferenceError(
             f"{socket}: expected an IMAGE batch shaped [batch, height, width, channels], got {list(shape)}."
         )
-    if shape[-1] != 3:
+    if shape[-1] not in (3, 4):
         raise ReferenceError(
-            f"{socket}: expected RGB images with 3 channels, got {shape[-1]}. "
-            "Convert the image to RGB before this node."
+            f"{socket}: expected RGB (3 channels) or RGBA (4 channels) images, got {shape[-1]} channels."
         )
     if shape[1] < 1 or shape[2] < 1:
         raise ReferenceError(f"{socket}: image has no pixels.")
@@ -96,11 +102,20 @@ def to_uint8(item, socket: str = "image") -> np.ndarray:
     return np.rint(np.clip(pixels, 0.0, 1.0) * 255.0).astype(np.uint8)
 
 
+def has_alpha(item) -> bool:
+    """True for an RGBA image (4 channels)."""
+    shape = tuple(getattr(item, "shape", ()))
+    return bool(shape) and shape[-1] == 4
+
+
 def encode(item, kind: str, socket: str = "image") -> Encoded:
     pixels = to_uint8(item, socket)
-    height, width = pixels.shape[:2]
+    height, width, channels = pixels.shape
+    alpha = channels == 4
+    if alpha and kind != "png":
+        raise ReferenceError(f"{socket}: has transparency, which JPEG cannot keep.")
     buffer = io.BytesIO()
-    image = Image.fromarray(pixels, "RGB")
+    image = Image.fromarray(pixels)  # uint8 (H, W, 3) -> RGB, (H, W, 4) -> RGBA, values untouched
     if kind == "png":
         image.save(buffer, **PNG_OPTIONS)
         mime = "image/png"
@@ -109,7 +124,7 @@ def encode(item, kind: str, socket: str = "image") -> Encoded:
         mime = "image/jpeg"
     else:
         raise ValueError(f"unknown encoding {kind}")
-    return Encoded(mime, buffer.getvalue(), width, height)
+    return Encoded(mime, buffer.getvalue(), width, height, alpha)
 
 
 def encode_all(references: list, kind: str) -> list[Encoded]:
@@ -136,6 +151,13 @@ def encode_with_fallback(references: list, fits) -> tuple[list[Encoded], str]:
     encoded = _encode_until_too_big(references, "png", fits)
     if encoded is not None:
         return encoded, "png"
+    transparent = list(dict.fromkeys(socket for socket, item in references if has_alpha(item)))
+    if transparent:
+        raise ReferenceError(
+            "The references are too large as lossless PNG, and the fallback would save them as JPEG, "
+            f"which cannot keep transparency. These references have transparency: {', '.join(transparent)}. "
+            "Reduce their size, or flatten them (remove the transparency) before this node. Nothing was sent."
+        )
     encoded = _encode_until_too_big(references, "jpeg", fits)
     if encoded is not None:
         return encoded, "jpeg"
