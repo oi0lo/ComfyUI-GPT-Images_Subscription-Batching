@@ -167,11 +167,15 @@ def encode_with_fallback(references: list, fits) -> tuple[list[Encoded], str]:
     )
 
 
-def write_files(encoded: list[Encoded], directory: str) -> list[str]:
-    """Write encoded references into this run's own temporary folder."""
+def write_files(encoded: list[Encoded], directory: str, names: list[str] | None = None) -> list[str]:
+    """Write encoded references into this run's own temporary folder, as reference_01.png and so
+    on, or under `names` (without extension) when given."""
+    if names is not None and len(names) != len(encoded):
+        raise ValueError("write_files needs one name per image.")
     paths = []
     for index, item in enumerate(encoded, start=1):
-        path = os.path.join(directory, f"reference_{index:02d}{item.extension}")
+        stem = names[index - 1] if names is not None else f"reference_{index:02d}"
+        path = os.path.join(directory, f"{stem}{item.extension}")
         with open(path, "xb") as handle:
             handle.write(item.data)
         paths.append(path)

@@ -1,4 +1,4 @@
-"""Antigravity Images: images through the Antigravity CLI (`agy`) and the user's Google sign-in.
+"""Antigravity Nano Banana: images through the Antigravity CLI (`agy`) and the user's Google sign-in.
 
 The command is the one proven in the user's tests on 2026-10-27 (text only, and one
 reference that kept the same person):
@@ -384,7 +384,7 @@ async def generate(
     images = pick_images(answer, started, reference_paths)
     if not images:
         raw = bytes(output.stdout).decode("utf-8", "replace").strip()
-        log.warning("[Antigravity Images] Antigravity's full answer (%d s, exit code %s): %s",
+        log.warning("[Antigravity Nano Banana] Antigravity's full answer (%d s, exit code %s): %s",
                     int(time.monotonic() - clock), exit_code, raw[:3000] or "(none)")
         raise AgyError(explain_failure(answer, output, exit_code))
     usage = (answer or {}).get("usage")

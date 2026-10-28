@@ -9,12 +9,13 @@ import unittest
 
 import helpers  # noqa: F401
 import grok_exec
+import grok_video
 
 FAKE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fake_grok.py")
 
 
 @unittest.skipIf(sys.platform == "win32", "uses a POSIX script as the stand-in Grok Build")
-class GenerateTests(unittest.TestCase):
+class FakeGrokCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         root = self.tmp.name
@@ -27,7 +28,8 @@ class GenerateTests(unittest.TestCase):
         self.run_dir = os.path.join(root, "run")
         os.makedirs(self.run_dir)
         self.env = {"GROK_HOME": self.home, "FAKE_GROK_LOG": self.log, "XAI_API_KEY": "xai-must-not-reach-grok"}
-        self.old_env = {k: os.environ.get(k) for k in list(self.env) + ["FAKE_GROK_MODE", "FAKE_GROK_STALE"]}
+        self.old_env = {k: os.environ.get(k) for k in list(self.env) + ["FAKE_GROK_MODE", "FAKE_GROK_STALE",
+                                                                         "FAKE_REF_COPY_DIR"]}
         os.environ.update(self.env)
 
     def tearDown(self):
@@ -38,21 +40,23 @@ class GenerateTests(unittest.TestCase):
                 os.environ[key] = value
         self.tmp.cleanup()
 
-    def run_mode(self, mode, references=(), **kwargs):
-        os.environ["FAKE_GROK_MODE"] = mode
-        return asyncio.run(grok_exec.generate(self.grok, "a cat on Saturn's rings", list(references),
-                                              self.run_dir, **kwargs))
-
     def logged(self):
         with open(self.log) as handle:
             return json.load(handle)
 
-    def reference(self):
+    def reference(self, name="reference_01.png"):
         from PIL import Image
-        path = os.path.join(self.run_dir, "reference_01.png")
+        path = os.path.join(self.run_dir, name)
         Image.new("RGBA", (8, 8), (1, 2, 3, 0)).save(path)
         os.utime(path, (time.time() - 60, time.time() - 60))
         return path
+
+
+class GenerateTests(FakeGrokCase):
+    def run_mode(self, mode, references=(), **kwargs):
+        os.environ["FAKE_GROK_MODE"] = mode
+        return asyncio.run(grok_exec.generate(self.grok, "a cat on Saturn's rings", list(references),
+                                              self.run_dir, **kwargs))
 
     def test_text_only_success_and_command(self):
         result = self.run_mode("success")
@@ -159,6 +163,183 @@ class GenerateTests(unittest.TestCase):
                 grok_exec.find_grok()
         finally:
             os.environ["PATH"] = old or ""
+
+
+class GenerateVideoTests(FakeGrokCase):
+    PROMPT = "a pale young blonde woman is playfully angry at the viewer"
+
+    def request(self, **kwargs):
+        return grok_video.VideoRequest(**dict({"prompt": self.PROMPT, "duration": 5}, **kwargs))
+
+    def run_video(self, mode, request=None, **kwargs):
+        os.environ["FAKE_GROK_MODE"] = mode
+        return asyncio.run(grok_exec.generate_video(self.grok, request or self.request(), self.run_dir, **kwargs))
+
+    def calls(self):
+        return self.logged()["tool_calls"]
+
+    def test_no_input_makes_the_first_frame_then_the_video(self):
+        result = self.run_video("success")
+        self.assertTrue(result.video.path.endswith(".mp4") and os.path.isfile(result.video.path))
+        self.assertEqual((result.video.tool, result.video.prompt, result.video.aspect_ratio, result.video.duration,
+                          result.video.resolution), ("reference_to_video", self.PROMPT, "16:9", 5, "720p"))
+        self.assertEqual((result.first_frame.tool, result.first_frame.prompt), ("image_gen", self.PROMPT))
+        self.assertTrue(os.path.isfile(result.first_frame.path))
+        self.assertEqual(result.extra_videos, [])
+        self.assertAlmostEqual(result.cost_usd, 0.31)
+        seen = self.logged()
+        args = seen["args"]
+        self.assertEqual(args[args.index("--tools") + 1], "image_gen,reference_to_video")
+        self.assertEqual(args[args.index("--max-turns") + 1], "6")
+        self.assertNotIn("--effort", args)
+        self.assertFalse(seen["has_api_key"])
+        self.assertEqual(seen["disable_api_key_auth"], "1")
+        first, second = self.calls()
+        self.assertEqual(first, {"tool": "image_gen", "input": {"prompt": self.PROMPT, "aspect_ratio": "16:9"}})
+        self.assertEqual(second["tool"], "reference_to_video")
+        self.assertEqual(second["input"], {"prompt": self.PROMPT, "first_frame": result.first_frame.path,
+                                           "aspect_ratio": "16:9", "duration": 5, "resolution_name": "720p"})
+
+    def test_frames_are_pinned_first_middle_last_and_no_first_frame_is_made(self):
+        first, middle, last = (self.reference(n) for n in ("first_frame.png", "middle_frame.png", "last_frame.png"))
+        result = self.run_video("success", self.request(first_frame=first, middle_frame=middle, last_frame=last,
+                                                        duration=7, aspect_ratio="9:16", resolution="480p"))
+        self.assertIsNone(result.first_frame)
+        args = self.logged()["args"]
+        self.assertEqual(args[args.index("--tools") + 1], "reference_to_video")
+        self.assertEqual(args[args.index("--max-turns") + 1], "4")
+        (call,) = self.calls()
+        self.assertEqual(call["input"], {
+            "prompt": self.PROMPT, "first_frame": first, "keyframes": [{"image": middle, "timestamp_s": 3.5}],
+            "last_frame": last, "aspect_ratio": "9:16", "duration": 7, "resolution_name": "480p"})
+
+    def test_references_and_voices_are_passed_in_order(self):
+        refs = [self.reference(f"reference_0{n}.png") for n in (1, 2, 3)]
+        result = self.run_video("success", self.request(prompt="<IMAGE_0> and <IMAGE_1> talk, <AUDIO_0>",
+                                                        references=tuple(refs), voices=("ara", "rex")))
+        (call,) = self.calls()
+        self.assertEqual(call["input"]["images"], refs)
+        self.assertEqual(call["input"]["voices"], ["ara", "rex"])
+        self.assertEqual(call["input"]["prompt"], "<IMAGE_0> and <IMAGE_1> talk, <AUDIO_0>")
+        self.assertNotIn("first_frame", call["input"])
+        self.assertEqual(result.video.prompt, "<IMAGE_0> and <IMAGE_1> talk, <AUDIO_0>")
+
+    def test_voice_only_has_no_first_frame_and_no_image_tool(self):
+        result = self.run_video("success", self.request(voices=("eve",)))
+        self.assertIsNone(result.first_frame)
+        self.assertEqual([c["tool"] for c in self.calls()], ["reference_to_video"])
+        self.assertEqual(self.calls()[0]["input"]["voices"], ["eve"])
+        args = self.logged()["args"]
+        self.assertEqual(args[args.index("--tools") + 1], "reference_to_video")
+
+    def test_prompt_output_is_the_tool_input_not_ours(self):
+        result = self.run_video("rewrite")
+        self.assertEqual(result.video.prompt, "REWRITTEN BY AGENT: " + self.PROMPT)
+
+    def test_privacy_mode_error_says_how_to_turn_it_off_and_keeps_the_first_frame(self):
+        with self.assertRaises(grok_exec.GrokError) as caught:
+            self.run_video("zdr")
+        message = str(caught.exception)
+        self.assertTrue(message.startswith(
+            "Grok Build refused to make a video because its privacy mode (zero data retention) is on. Turn it off in "
+            "Grok Build: type /privacy and set \"Coding data, retention, and training\" to Opt in, then run again. "
+            "No video was made. The first frame Grok made is saved at: "), message)
+        self.assertIn("Grok said: Video generation tools are unavailable under zero data retention (ZDR).", message)
+        self.assertIn(os.path.join("sessions"), message)
+
+    def test_free_plan_message(self):
+        with self.assertRaises(grok_exec.GrokError) as caught:
+            self.run_video("upsell", self.request(voices=("eve",)))
+        self.assertIn("does not include video generation", str(caught.exception))
+        self.assertIn("SuperGrok", str(caught.exception))
+
+    def test_403_and_429_and_timeout_and_unknown_voice_quote_the_tool(self):
+        cases = {
+            "video_http403": ["Grok's video tool failed: Video generation failed with HTTP 403 Forbidden",
+                              "refused the request for this account", "includes video generation"],
+            "video_429": ["HTTP 429 Too Many Requests: Too many requests for team", "limit on xAI's side",
+                          "'grok logout' and then 'grok login'"],
+            "video_timeout": ["Video generation did not complete within 300s (request_id=req-abc)",
+                              "waits at most 300 seconds for a video. Nothing was retried."],
+            "bad_voice": ["unknown voice. Available voices: ara, eve"],
+        }
+        for mode, parts in cases.items():
+            with self.assertRaises(grok_exec.GrokError, msg=mode) as caught:
+                self.run_video(mode, self.request(voices=("eve",)))
+            for part in parts:
+                self.assertIn(part, str(caught.exception), mode)
+
+    def test_first_frame_failure_is_reported_as_an_image_error(self):
+        with self.assertRaises(grok_exec.GrokError) as caught:
+            self.run_video("still_fails")
+        self.assertTrue(str(caught.exception).startswith("Grok's image tool failed: Image generation failed with HTTP 403"))
+        self.assertIn("includes image generation", str(caught.exception))
+
+    def test_agent_stops_after_the_still(self):
+        with self.assertRaises(grok_exec.GrokError) as caught:
+            self.run_video("still_only")
+        message = str(caught.exception)
+        self.assertIn("Grok's agent did not call the video tool. It made the first frame.", message)
+        self.assertIn("The first frame Grok made is saved at: ", message)
+
+    def test_no_tool_call(self):
+        with self.assertRaises(grok_exec.GrokError) as caught:
+            self.run_video("no_tool", self.request(voices=("eve",)))
+        self.assertIn("did not call the video tool", str(caught.exception))
+
+    def test_video_uploaded_to_a_bucket_is_explained(self):
+        with self.assertRaises(grok_exec.GrokError) as caught:
+            self.run_video("uploaded", self.request(voices=("eve",)))
+        self.assertIn("uploaded the video to the storage bucket", str(caught.exception))
+        self.assertIn("https://bucket.example/grok-videos/abc.mp4", str(caught.exception))
+
+    def test_path_missing_from_stream_falls_back_to_the_session_videos_folder(self):
+        result = self.run_video("no_path", self.request(voices=("eve",)))
+        self.assertIn(result.session_id, result.video.path)
+        self.assertTrue(result.video.path.endswith("1.mp4"))
+
+    def test_a_second_video_is_reported_but_the_first_is_the_result(self):
+        result = self.run_video("two_videos", self.request(voices=("eve",)))
+        self.assertTrue(result.video.path.endswith("1.mp4"))
+        self.assertEqual(len(result.extra_videos), 1)
+        self.assertTrue(result.extra_videos[0].endswith("2.mp4"))
+
+    def test_an_input_or_an_old_file_is_never_the_video(self):
+        ref = self.reference("first_frame.png")
+        with self.assertRaises(grok_exec.GrokError):
+            self.run_video("lie", self.request(first_frame=ref))
+        old = os.path.join(self.run_dir, "old.mp4")
+        with open(old, "wb") as handle:
+            handle.write(b"old video")
+        os.utime(old, (time.time() - 600, time.time() - 600))
+        os.environ["FAKE_GROK_STALE"] = old
+        with self.assertRaises(grok_exec.GrokError):
+            self.run_video("stale", self.request(voices=("eve",)))
+
+    def test_refused_before_running_when_the_request_is_wrong(self):
+        for request, part in ((self.request(duration=99), "Duration must be"),
+                              (self.request(aspect_ratio="21:9"), "Unknown aspect ratio"),
+                              (self.request(prompt=" "), "The prompt is empty")):
+            with self.assertRaises(grok_exec.GrokError) as caught:
+                self.run_video("success", request)
+            self.assertIn(part, str(caught.exception))
+            self.assertTrue(str(caught.exception).endswith("Nothing was sent."))
+        self.assertFalse(os.path.exists(self.log))  # Grok Build never started
+
+    def test_timeout_and_stop_end_the_process(self):
+        with self.assertRaises(grok_exec.GrokError) as caught:
+            self.run_video("hang", timeout=1.0, poll_interval=0.05)
+        self.assertIn("did not finish", str(caught.exception))
+        started = time.monotonic()
+        with self.assertRaises(grok_exec.GrokInterrupted):
+            self.run_video("hang", is_interrupted=lambda: time.monotonic() - started > 0.5, poll_interval=0.05)
+
+    def test_image_errors_still_get_the_429_note(self):
+        os.environ["FAKE_GROK_MODE"] = "http429"
+        with self.assertRaises(grok_exec.GrokError) as caught:
+            asyncio.run(grok_exec.generate(self.grok, "a cat", [], self.run_dir))
+        self.assertIn("HTTP 429 Too Many Requests", str(caught.exception))
+        self.assertIn("limit on xAI's side", str(caught.exception))
 
 
 class ReferenceSizeTests(unittest.TestCase):
