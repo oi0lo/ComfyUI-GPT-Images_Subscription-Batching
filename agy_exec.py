@@ -36,7 +36,7 @@ try:
 except ImportError:  # loaded on its own (tests)
     import agent_process
 
-log = logging.getLogger("comfyui-gpt-images")
+log = logging.getLogger("Comfy-CLI-Subscription_Image-Video")
 
 AGENT_MODEL = "gemini-3.8-flash-low"  # the agent model of the user's successful tests
 TIMEOUT_SECONDS = 15 * 60

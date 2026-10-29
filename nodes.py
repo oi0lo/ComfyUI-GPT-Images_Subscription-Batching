@@ -36,7 +36,7 @@ from comfy_execution.graph_utils import ExecutionBlocker
 from . import (agy_exec, batch_http, batch_request, codex_exec, credentials, grok_exec, grok_video, key_prompt,
                key_setup, presets, references, run_folder, saved_workflow)
 
-log = logging.getLogger("comfyui-gpt-images")
+log = logging.getLogger("Comfy-CLI-Subscription_Image-Video")
 
 MODE_SUBSCRIPTION = "Subscription"
 MODE_BATCH = "Sunburst Batch"
@@ -143,7 +143,7 @@ class GPTImagesNode(io.ComfyNode):
         return io.Schema(
             node_id="GPTImagesSubscriptionSunburstBatch",
             display_name="GPT Images: Subscription / Batching gpt-image-2.5 sunburst",
-            category="GPT Images",
+            category="Comfy-CLI-Subscription_Image-Video",
             description=(
                 "Subscription: generates one image through Codex with your ChatGPT sign-in and returns it. "
                 "Sunburst Batch: submits one gpt-image-2.5-sunburst job to the OpenAI Batch API "
@@ -260,7 +260,7 @@ class GPTImagesNode(io.ComfyNode):
         codex = codex_exec.find_codex()
         await asyncio.to_thread(codex_exec.check_login, codex)
 
-        run_dir = _new_run_folder("comfyui-gpt-images-")
+        run_dir = _new_run_folder("Comfy-CLI-Subscription_Image-Video-")
         try:
             paths = _write_references(refs, run_dir, codex_exec.MAX_REFERENCE_BYTES, "GPT Images")
             log.info(
@@ -500,7 +500,7 @@ class GrokImagesNode(io.ComfyNode):
         return io.Schema(
             node_id="GrokImagesSubscription",
             display_name="Grok Images: Subscription",
-            category="Grok Images",
+            category="Comfy-CLI-Subscription_Image-Video",
             description=(
                 "Image: generates an image with Grok Imagine through Grok Build and your Grok sign-in (a plan "
                 "with image generation, such as SuperGrok), and returns it with the exact prompt Grok's agent "
@@ -729,7 +729,7 @@ class AntigravityNanoBananaNode(io.ComfyNode):
         return io.Schema(
             node_id="AntigravityNanoBananaSubscription",
             display_name="Antigravity Nano Banana: Subscription",
-            category="Antigravity Nano Banana",
+            category="Comfy-CLI-Subscription_Image-Video",
             description=(
                 "Generates an image through the Antigravity CLI and your Google sign-in, and returns every "
                 "image Antigravity saved in the run. Refuses Gemini API-key mode."

@@ -1,7 +1,7 @@
 [project]
-name = "comfyui-gpt-images-subscription-batching"
-version = "6.0.0"
-description = "ComfyUI node for ChatGPT-authenticated Codex image generation and OpenAI Sunburst Batch submissions"
+name = "comfy-cli-subscription-image-video"
+version = "6.1.0"
+description = "ComfyUI image and video nodes for Codex, Grok, Antigravity Nano Banana, and OpenAI Sunburst Batch"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }

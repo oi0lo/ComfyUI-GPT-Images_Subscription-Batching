@@ -1,6 +1,6 @@
-# ComfyUI GPT Images (version 6.0.0)
+# Comfy-CLI-Subscription_Image-Video (version 6.1.0)
 
-Three ComfyUI nodes in one package:
+Three ComfyUI nodes in one package (before version 6.1 the package was called `comfyui-gpt-images`):
 
 | Node | What it does | Who pays | Outputs |
 | --- | --- | --- | --- |
@@ -11,6 +11,21 @@ Three ComfyUI nodes in one package:
 Only the node (and mode) you run is used. None of them uses ComfyUI credits or OpenRouter. ComfyUI's own "Grok Image" partner nodes are different nodes: they use Comfy credits.
 
 Pure Python: the standard library plus what ComfyUI already ships (PyTorch, NumPy, Pillow, PyAV). No pip installs, no JavaScript, no frontend extension.
+
+## What's new in version 6.1
+
+**The package has a new name: `Comfy-CLI-Subscription_Image-Video`.** The features outgrew "GPT Images", so the folder, the zip and the menu group now carry the new name. Nothing else changed: the three nodes behave exactly as in version 6.0.0.
+
+- **One menu group.** All three nodes sit directly in the add-node menu group **Comfy-CLI-Subscription_Image-Video**, with no sub-groups. They were in three groups before (**GPT Images**, **Grok Images**, **Antigravity Nano Banana**). Searching still finds them by the same words.
+- **The badge** on each node shows the folder name, but ComfyUI's frontend cuts a leading "Comfy-" off it, so the badge reads `CLI-Subscription_Image-Video` (seen in frontend 1.57.4). The menu group keeps the full name.
+- **Node ids did not change** (`GPTImagesSubscriptionSunburstBatch`, `GrokImagesSubscription`, `AntigravityNanoBananaSubscription`), so workflows saved with version 6.0.0 open and run as they are.
+- **Your stored OpenAI API key is still found.** It stays in Windows Credential Manager under the same entry, so you do not enter it again.
+
+### Upgrading to 6.1
+
+1. Close ComfyUI.
+2. **Delete the old folder** `custom_nodes\comfyui-gpt-images`. Do this before adding the new one: both folders define the same nodes (same ids), so keeping both makes them clash.
+3. Unzip the new folder `Comfy-CLI-Subscription_Image-Video` into `custom_nodes` (see Install), then start ComfyUI.
 
 ## What's new in version 6
 
@@ -37,7 +52,7 @@ Both video modes show these dropdowns, with the choices Grok Build's video tool 
 
 **Antigravity Images is now Antigravity Nano Banana: Subscription.** Same node, new name: display name, category (**Antigravity Nano Banana**), log tag and run-folder prefix. Its internal id changed too (`AntigravityNanoBananaSubscription`), so a workflow that holds the old node shows it as a missing node: add the new node and connect the same prompt and images.
 
-### Upgrading
+### Upgrading from version 5 or older
 
 Replace the whole folder and restart ComfyUI. Workflows saved with version 5 or 4 open as they are, with two exceptions:
 
@@ -62,10 +77,10 @@ Replace the whole folder and restart ComfyUI. Workflows saved with version 5 or 
 
 ## Install
 
-1. Unzip so that this folder sits at `custom_nodes\comfyui-gpt-images` inside your ComfyUI folder.
+1. Unzip so that this folder sits at `custom_nodes\Comfy-CLI-Subscription_Image-Video` inside your ComfyUI folder.
    For ComfyUI Desktop that is inside the base folder chosen at install, for example
-   `D:\Comfy\Local\ComfyUI\custom_nodes\comfyui-gpt-images`.
-2. Restart ComfyUI. The nodes are in the categories **GPT Images**, **Grok Images** and **Antigravity Nano Banana**. Searching "sunburst", "codex", "grok", "grok video", "nano banana" or "antigravity" also finds them.
+   `D:\Comfy\Local\ComfyUI\custom_nodes\Comfy-CLI-Subscription_Image-Video`.
+2. Restart ComfyUI. The three nodes are in the menu group **Comfy-CLI-Subscription_Image-Video**. Searching "sunburst", "codex", "grok", "grok video", "nano banana" or "antigravity" also finds them.
 
 ## Setup
 
@@ -85,7 +100,7 @@ What the key window says is exact: the key is checked once with OpenAI (free) an
 
 - The included helper, from a terminal with ComfyUI's own Python (the error message prints this exact command for your install):
   ```
-  "D:\Comfy\Local\ComfyUI\.venv\Scripts\python.exe" "D:\Comfy\Local\ComfyUI\custom_nodes\comfyui-gpt-images\setup_credentials.py" set
+  "D:\Comfy\Local\ComfyUI\.venv\Scripts\python.exe" "D:\Comfy\Local\ComfyUI\custom_nodes\Comfy-CLI-Subscription_Image-Video\setup_credentials.py" set
   ```
   `status` shows which key source the node will use (never the key itself); `delete` removes the stored key. You can also remove it in Windows' Credential Manager under Windows Credentials.
 - The `OPENAI_API_KEY` environment variable. It takes priority over the stored key. Set it for your Windows user, then fully quit and reopen ComfyUI. If OpenAI rejects a key from the variable, the node tells you to fix or remove the variable; it does not open the window. Every program you run can see this variable, and OpenAI's standard libraries use it automatically.
@@ -179,7 +194,7 @@ What the video tool does with your images is up to Grok: from its source, a firs
 
 **Antigravity Nano Banana.** The node finds the Antigravity CLI, refuses API-key mode, writes the references into its run folder, and runs one request in that folder: `agy -p <request> --model gemini-3.8-flash-low --output-format json --json-schema <file> --print-timeout 15m`. The request asks for exactly one image from Antigravity's built-in image generator, with your prompt unchanged and the references given by their paths. The node then takes every new image saved at the top level of this run's conversation folder (`.gemini\antigravity-cli\brain\<conversation id>` in your user folder), plus image paths the agent reports inside `.gemini`. It never returns a reference or an identical copy of one: Antigravity keeps a copy of each reference in a `.tempmediaStorage` folder. The images stay in Antigravity's folder. In your test, one reference gave one 1024 x 1024 JPEG that kept the same person.
 
-**All subscription runs** give up after 15 minutes (Grok video: 25 minutes). Stop in ComfyUI ends the program (and anything it started). Nothing is ever retried automatically. The run folder (`comfyui-gpt-images-...`, `comfyui-grok-images-...` or `comfyui-nano-banana-...` in your temporary folder, with the reference copies) is deleted when the run ends.
+**All subscription runs** give up after 15 minutes (Grok video: 25 minutes). Stop in ComfyUI ends the program (and anything it started). Nothing is ever retried automatically. The run folder (`Comfy-CLI-Subscription_Image-Video-...`, `comfyui-grok-images-...` or `comfyui-nano-banana-...` in your temporary folder, with the reference copies) is deleted when the run ends.
 
 ## Limits and size checks
 
@@ -204,7 +219,7 @@ What the video tool does with your images is up to Grok: from its source, a firs
 Offline tests use stand-ins for Codex, Grok Build, Antigravity, OpenAI and the key window, and never generate anything. Run them with ComfyUI's Python from the `tests` folder:
 
 ```
-cd "D:\Comfy\Local\ComfyUI\custom_nodes\comfyui-gpt-images\tests"
+cd "D:\Comfy\Local\ComfyUI\custom_nodes\Comfy-CLI-Subscription_Image-Video\tests"
 "D:\Comfy\Local\ComfyUI\.venv\Scripts\python.exe" -m unittest
 ```
 

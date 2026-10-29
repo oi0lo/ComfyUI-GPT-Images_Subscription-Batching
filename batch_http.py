@@ -19,7 +19,7 @@ API_PORT = 443
 DASHBOARD_URL = "https://platform.openai.com/batches/{batch_id}"
 BATCHES_PAGE = "https://platform.openai.com/batches"
 SOCKET_TIMEOUT = 120  # seconds per network operation
-USER_AGENT = "comfyui-gpt-images/1.0"
+USER_AGENT = "Comfy-CLI-Subscription_Image-Video/1.0"
 MAX_RESPONSE_BYTES = 1_000_000
 
 NO_BATCH = "No batch was created, so queueing this run again cannot make a duplicate."
